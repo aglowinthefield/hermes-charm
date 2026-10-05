@@ -177,9 +177,37 @@ The service template is Linux-specific. Windows is not supported by this install
 
 ## Scope
 
-The first release extracts the existing maintenance code and eleven active patches.
-Other workflow hooks and session customizations have not been migrated into Charm.
+Charm owns the core bundle and reusable workflow implementations. Home configuration
+selects their entry points; merely installing Charm does not register or run them.
 No automatic backend restarts, network telemetry or unreviewed plugin updates occur.
+
+| Implementation | Entry point | Configuration owner |
+| --- | --- | --- |
+| Review routing and CI handoff gate | `agent-hooks/kanban-review-routing.sh` | Home supplies reviewer, operator, investigation profile, and board paths |
+| PR-body policy | `agent-hooks/pr-body-humanized.py` | Explicit harness hook registration |
+| Repository dependency bootstrap | `agent-hooks/kanban-worktree-deps.sh` | Repository supplies its own `scripts/worktree-deps.sh` |
+| Card-body gate | `agent-hooks/kanban-card-body-gate.sh` | Optional registration; migration does not enable it |
+| Block-claim auditing and weekly report | `agent-hooks/kanban-blocked-claim-audit.sh`, `scripts/claim-audit-weekly.py` | Shadow-only hook and home schedule |
+| Parked-review and give-up notifications | `agent-hooks/kanban-review-parked.sh`, `scripts/kanban-giveup-watch.py` | Home board, destination, identities, and schedule |
+| CI watcher and Linear intake | `scripts/ci-watchdog.py`, `scripts/linear-intake.py` | Required deployment JSON; existing state controls live/shadow behavior |
+| Worktree maintenance | `scripts/kanban-worktree-sweep.py` | Home schedule and active runtime paths |
+
+The eleven native `charm enable/disable` settings above control core patch selection.
+Shell policies and scheduled integrations are separately selected by home hook and
+cron registrations. They are not silently enabled by those core settings or by plugin
+registration. Blocking policies keep their fail-closed shell adapter rather than
+becoming native callbacks whose exceptions are logged and skipped.
+
+Integration scripts require `HERMES_DEPLOYMENT_CONFIG` to name the home-owned JSON
+file. Sections are `linear-intake`, `ci-watchdog`, and `review-notifications`.
+`scripts/deployment_settings.py` validates required settings and types. Missing
+configuration fails visibly. Credential values remain in the secret manager or
+runtime environment; JSON contains references only.
+
+The extraction preserves workflow policy. Bootstrap still runs after worker spawn,
+claim auditing remains shadow-only, and the retired Linear notification hook stays
+absent. No computer-use guard was copied because the active guard blocked its own
+source text; the existing home guard remains in place.
 
 `customizations.json` is the catalog's source. After reviewing updated metadata, run
 `python3 scripts/sync_catalog.py` to regenerate this table and the native settings schema.
