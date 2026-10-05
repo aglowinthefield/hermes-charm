@@ -7,7 +7,9 @@ still had it registered, which failed closed on every kanban_create.
 Checks, per the documented behavior of the original:
 1. The card body must contain '## Goal' and '## Acceptance criteria' headings.
 2. Every name in the card's skills pins must resolve for the assignee:
-   shared ~/.hermes/skills plus ~/.hermes/profiles/<assignee>/skills.
+   shared ~/.hermes/skills plus ~/.hermes/profiles/<assignee>/skills, plus
+   <dir>/.hermes/skills and <dir>/.agents/skills for each skills.trusted_project_dirs
+   entry in config.yaml (the project skills Hermes's loader trusts).
    A 'plugin:skill' pin resolves against ~/.hermes/plugins/<plugin>/skills/<skill>.
 
 Input: stdin JSON. Tool arguments are found under 'tool_input', 'args', or the
@@ -43,7 +45,34 @@ def skill_dirs(assignee):
     dirs = [os.path.join(HERMES_HOME, "skills")]
     if assignee:
         dirs.append(os.path.join(HERMES_HOME, "profiles", assignee, "skills"))
+    # Project skills, from the same trusted roots Hermes's loader accepts.
+    for root in trusted_project_dirs():
+        dirs += [os.path.join(root, ".hermes", "skills"), os.path.join(root, ".agents", "skills")]
     return dirs
+
+
+def trusted_project_dirs():
+    """skills.trusted_project_dirs from config.yaml.
+
+    System python3 has no yaml module, so read the one block-style list this needs.
+    """
+    try:
+        with open(os.path.join(HERMES_HOME, "config.yaml"), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    found, section, in_list = [], None, False
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent == 0:
+            section, in_list = line.split(":", 1)[0].strip(), False
+        elif section == "skills" and indent == 2 and not line.lstrip().startswith("-"):
+            in_list = line.strip() == "trusted_project_dirs:"
+        elif in_list and line.lstrip().startswith("- "):
+            found.append(os.path.expanduser(line.lstrip()[2:].strip().strip("'\"")))
+    return found
 
 
 def resolvable(name, dirs):
