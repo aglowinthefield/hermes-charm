@@ -1,0 +1,5 @@
+name: charm
+version: "0.1.0"
+description: Maintained Hermes customizations with an explicit pinned core patch bundle
+provides_tools: []
+capabilities: []

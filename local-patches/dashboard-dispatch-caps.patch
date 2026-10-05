@@ -1,0 +1,31 @@
+--- a/plugins/kanban/dashboard/plugin_api.py	2026-09-23 11:12:23
++++ b/plugins/kanban/dashboard/plugin_api.py	2026-09-23 11:12:35
+@@ -1242,9 +1242,26 @@
+ 
+ @router.post("/dispatch")
+ def dispatch(dry_run: bool = Query(False), max_n: int = Query(8, alias="max"), board: Optional[str] = Query(None)):
+-    """Dispatch nudge so the UI doesn't wait out the 60 s dispatcher tick."""
++    """Dispatch nudge so the UI doesn't wait out the 60 s dispatcher tick.
++
++    Honours kanban.max_in_progress, kanban.max_in_progress_per_profile, kanban.failure_limit and
++    kanban.default_assignee exactly as the gateway tick and ``hermes kanban dispatch`` do. Without
++    them a nudge spawned ``max`` (8) workers in one pass on a board capped at 1 per profile."""
++    from hermes_cli.config import load_config
++    cfg = load_config()
++    kanban_cfg = (cfg.get("kanban") or {}) if isinstance(cfg, dict) else {}
++    try:
++        failure_limit = max(int(kanban_cfg.get("failure_limit", kanban_db.DEFAULT_FAILURE_LIMIT)), 1)
++    except (TypeError, ValueError):
++        failure_limit = kanban_db.DEFAULT_FAILURE_LIMIT
+     with _board_conn(board) as (board, conn):
+-        result = kbd.dispatch_once(conn, dry_run=dry_run, max_spawn=max_n, board=board)
++        result = kbd.dispatch_once(
++            conn, dry_run=dry_run, max_spawn=max_n, board=board,
++            max_in_progress=kbd.resolve_max_in_progress(kbd._positive_int(kanban_cfg.get("max_in_progress"), None)),
++            max_in_progress_per_profile=kbd._positive_int(kanban_cfg.get("max_in_progress_per_profile"), None),
++            failure_limit=failure_limit,
++            default_assignee=(kanban_cfg.get("default_assignee") or "").strip() or None,
++        )
+         try:
+             return asdict(result)  # DispatchResult is a dataclass
+         except TypeError:

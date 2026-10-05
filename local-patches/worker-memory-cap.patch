@@ -1,0 +1,105 @@
+diff --git a/tests/tools/test_process_registry.py b/tests/tools/test_process_registry.py
+index 8faa5cf9a39..36bedf37480 100644
+--- a/tests/tools/test_process_registry.py
++++ b/tests/tools/test_process_registry.py
+@@ -2574,6 +2574,41 @@ class TestSystemdCgroupIsolation:
+ 
+         assert pr._worker_memory_max_bytes() == pr._DEFAULT_WORKER_MEMORY_MAX_BYTES
+ 
++    def test_worker_memory_cap_env_raises_ceiling_within_half_ram(self, monkeypatch):
++        import tools.process_registry as pr
++
++        gib = 1024 * 1024 * 1024
++        monkeypatch.delenv("TERMINAL_LOCAL_MEMORY_MAX_MB", raising=False)
++        monkeypatch.setattr(pr.Path, "read_text", lambda *_a, **_k: "0::/\n")
++        pages = {"SC_PHYS_PAGES": (64 * gib) // 4096, "SC_PAGE_SIZE": 4096}
++        monkeypatch.setattr(pr.os, "sysconf", lambda name: pages[name])
++
++        monkeypatch.delenv("HERMES_WORKER_MEMORY_MAX_CAP_MB", raising=False)
++        assert pr._worker_memory_max_bytes() == 4 * gib
++
++        monkeypatch.setenv("HERMES_WORKER_MEMORY_MAX_CAP_MB", str(12 * 1024))
++        assert pr._worker_memory_max_bytes() == 12 * gib
++
++        # Still bounded by half of physical RAM.
++        monkeypatch.setenv("HERMES_WORKER_MEMORY_MAX_CAP_MB", str(100 * 1024))
++        assert pr._worker_memory_max_bytes() == 32 * gib
++
++        monkeypatch.setenv("HERMES_WORKER_MEMORY_MAX_CAP_MB", "nope")
++        assert pr._worker_memory_max_bytes() == 4 * gib
++
++    def test_worker_slice_env_places_scope_in_slice(self, monkeypatch):
++        import tools.process_registry as pr
++
++        monkeypatch.setenv("HERMES_WORKER_SLICE", "hermes-workers.slice")
++        argv = pr._systemd_scope_argv("/usr/bin/systemd-run", "u", "true")
++        assert argv[argv.index("--slice") + 1] == "hermes-workers.slice"
++
++        monkeypatch.setenv("HERMES_WORKER_SLICE", "../evil")
++        assert "--slice" not in pr._systemd_scope_argv("/usr/bin/systemd-run", "u", "true")
++
++        monkeypatch.delenv("HERMES_WORKER_SLICE")
++        assert "--slice" not in pr._systemd_scope_argv("/usr/bin/systemd-run", "u", "true")
++
+     def test_kill_recovered_detached_already_exited_stops_persisted_scope(
+         self, registry, monkeypatch
+     ):
+diff --git a/tools/process_registry.py b/tools/process_registry.py
+index f02463baf6a..fc858244ef5 100644
+--- a/tools/process_registry.py
++++ b/tools/process_registry.py
+@@ -110,6 +110,37 @@ _DEFAULT_WORKER_MEMORY_MAX_BYTES = 1024 * 1024 * 1024
+ _WORKER_MEMORY_MAX_CAP_BYTES = 4 * 1024 * 1024 * 1024
+ 
+ 
++def _worker_memory_cap_bytes() -> int:
++    """Ceiling on the half-of-RAM bound. ``HERMES_WORKER_MEMORY_MAX_CAP_MB`` replaces the 4 GiB
++    default for hosts whose workers run whole-monorepo typecheck/test (4 GiB OOM-kills them). It
++    can raise the ceiling but never past half of RAM or the gateway's own cgroup limit."""
++    raw = os.getenv("HERMES_WORKER_MEMORY_MAX_CAP_MB", "").strip()
++    if raw:
++        try:
++            parsed = int(raw) * 1024 * 1024
++        except ValueError:
++            parsed = -1
++        if parsed >= _MIN_WORKER_MEMORY_MAX_BYTES:
++            return parsed
++        logger.warning(
++            "Ignoring invalid HERMES_WORKER_MEMORY_MAX_CAP_MB=%r; "
++            "expected an integer representing at least %d MiB",
++            raw, _MIN_WORKER_MEMORY_MAX_BYTES // (1024 * 1024))
++    return _WORKER_MEMORY_MAX_CAP_BYTES
++
++
++def _worker_slice_argv() -> List[str]:
++    """``--slice`` for ``HERMES_WORKER_SLICE`` so every worker scope shares one aggregate
++    memory ceiling (set MemoryMax on that slice unit); empty when unset or not a .slice name."""
++    name = os.getenv("HERMES_WORKER_SLICE", "").strip()
++    if not name:
++        return []
++    if not name.endswith(".slice") or "/" in name:
++        logger.warning("Ignoring invalid HERMES_WORKER_SLICE=%r; expected a *.slice unit name", name)
++        return []
++    return ["--slice", name]
++
++
+ def _worker_memory_max_bytes() -> int:
+     """Finite per-worker cgroup limit that can never widen host risk.
+     ``TERMINAL_LOCAL_MEMORY_MAX_MB`` is honored only when it *tightens* the safe
+@@ -154,7 +185,7 @@ def _worker_memory_max_bytes() -> int:
+             os.sysconf("SC_PAGE_SIZE")
+         )
+         physical_bound = min(
+-            _WORKER_MEMORY_MAX_CAP_BYTES,
++            _worker_memory_cap_bytes(),
+             max(_MIN_WORKER_MEMORY_MAX_BYTES, physical_bytes // 2),
+         )
+         candidates.append(physical_bound)
+@@ -170,6 +201,7 @@ def _systemd_scope_argv(binary: str, unit_name: str, *argv: str) -> List[str]:
+     No ``OOMPolicy=``: transient scopes reject it on systemd <253 (#102486)."""
+     return [
+         binary, "--user", "--scope", "--quiet", "--unit", unit_name, "--collect",
++        *_worker_slice_argv(),
+         "--property", "MemoryAccounting=yes",
+         "--property", f"MemoryMax={_worker_memory_max_bytes()}",
+         "--", *argv,

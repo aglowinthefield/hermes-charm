@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.venv/
+.hermes-test/
+.install-metadata.json
+.hermes-catalog.json

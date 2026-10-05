@@ -1,0 +1,16 @@
+# Patches that must be applied to ~/.hermes/hermes-agent. One name per line, no .patch.
+# scripts/local-patches-ensure.sh reapplies them on every gateway/serve start (systemd
+# ExecStartPre), which covers the restart after `hermes update` stashes them.
+# Remove a line once its fix lands upstream. See README.md for each patch.
+worker-memory-cap
+cron-worker-bootstrap
+kanban-worktree-teardown
+dashboard-dispatch-caps
+project-skills-worktree-trust
+multiplex-notice-profile-scope
+kanban-merged-review-sync
+idle-compact-watchdog-79357
+kanban-skill-pin-tolerance
+kanban-token-hygiene
+
+kanban-branch-name-punctuation

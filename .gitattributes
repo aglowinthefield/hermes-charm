@@ -1,0 +1,3 @@
+# Unified diff context lines deliberately contain a single leading space.
+# Preserve reviewed patch bytes and validate them through pins and git apply.
+local-patches/*.patch -whitespace

@@ -1,0 +1,752 @@
+diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
+index 17a55196c4..c6985a0c47 100644
+--- a/hermes_cli/kanban_db.py
++++ b/hermes_cli/kanban_db.py
+@@ -2751,6 +2751,20 @@ def complete_task(
+     whitespace-only evidence raises :class:`EmptyCompletionError` after an
+     auditable event. Approving a card out of ``review`` stays exempt.
+     """
++    return _complete_task_with_acceptance(
++        conn, task_id, result=result, summary=summary, metadata=metadata,
++        created_cards=created_cards, expected_run_id=expected_run_id,
++        fire_lifecycle_hook=fire_lifecycle_hook, force=force,
++    )
++
++
++def _complete_task_with_acceptance(
++    conn: sqlite3.Connection, task_id: str, *, result: Optional[str] = None,
++    summary: Optional[str] = None, metadata: Optional[dict] = None,
++    created_cards: Optional[Iterable[str]] = None, expected_run_id: Optional[int] = None,
++    fire_lifecycle_hook: bool = True, force: bool = False, acceptance=None,
++) -> bool:
++    """Internal completion path; only the reconciler supplies prepared evidence."""
+     now = int(time.time())
+     # Cheap pre-check; re-checked inside the txn to close the parent-reopen race.
+     if not _parents_satisfied(conn, task_id):
+@@ -2762,7 +2776,8 @@ def complete_task(
+         conn, task_id, metadata, summary=summary, result=result,
+     )
+     handoff_summary = summary if summary is not None else result
+-    acceptance = prepare_acceptance(conn, task_id, expected_run_id, metadata)
++    if acceptance is None:
++        acceptance = prepare_acceptance(conn, task_id, expected_run_id, metadata)
+     if acceptance is False:
+         return False
+     with write_txn(conn):
+diff --git a/hermes_cli/kanban_db_dispatch.py b/hermes_cli/kanban_db_dispatch.py
+index 87ce60d76d..d33d8b5644 100644
+--- a/hermes_cli/kanban_db_dispatch.py
++++ b/hermes_cli/kanban_db_dispatch.py
+@@ -152,6 +152,10 @@ class DispatchResult:
+     """Memory pressure that restricted this tick: ``"critical"`` (no new
+     workers), ``"elevated"`` (at most one), ``None`` (no restriction).
+     Reclaim/promotion bookkeeping still ran; deferred tasks stay queued."""
++    completed_merged_prs: list[str] = field(default_factory=list)
++    """Review cards completed using verified merged-PR acceptance."""
++    pr_reconciliation: list[tuple[str, str, str]] = field(default_factory=list)
++    """Read-only diagnostics: task ID, PR URL, classification."""
+ 
+ 
+ def describe_suppression(results: Iterable[Optional["DispatchResult"]]) -> str:
+@@ -1990,19 +1994,25 @@ def dispatch_once(
+         )
+ 
+     try:
+-        db_path = _kb.kanban_db_path(board=board)
++        db_path = _kb.kanban_db_path(board=board).expanduser().resolve()
+     except Exception:
+         # Must not lose the tick — fall through to an unguarded dispatch.
+         result = _locked_tick()
+         _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
+         return result
++    from hermes_cli.kanban_pr_reconcile import snapshot_reviews, reconcile_reviews
++    snapshots = []
+     with _kbc._dispatch_tick_lock(db_path) as held:
+         if not held:
+             result = DispatchResult(skipped_locked=True)
+         else:
+             result = _locked_tick()
++            if not dry_run:
++                snapshots = snapshot_reviews(conn, db_path)
+             # Still under the dispatch lock: periodic PASSIVE WAL checkpoint.
+             _kbc._maybe_checkpoint_wal(conn, db_path)
++    if snapshots:
++        reconcile_reviews(conn, db_path, snapshots, result)
+     # Lock released. Fire the tick observer strictly OUTSIDE the critical
+     # section: a slow subscriber must never stall a sibling dispatcher's tick.
+     _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
+diff --git a/hermes_cli/kanban_pr_acceptance.py b/hermes_cli/kanban_pr_acceptance.py
+index 88f437285a..30ac812d56 100644
+--- a/hermes_cli/kanban_pr_acceptance.py
++++ b/hermes_cli/kanban_pr_acceptance.py
+@@ -115,7 +115,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
+         declared = _PR.fullmatch(contract)
+         url = contract if declared else published_pr
+         match = _PR.fullmatch(url or "")
+-        if not match or (not declared and match[1] != contract) or (declared and published_pr and published_pr != contract):
++        if not match or (not declared and match[1] != contract) or (declared and published_pr != contract):
+             receipt["detail"] = "Supply metadata.published_pr matching the persisted completion contract."
+             return receipt
+         repo, number = match[1], int(match[2])
+@@ -129,6 +129,10 @@ def collect_acceptance(contract: str, published_pr: str | None,
+             # A private repo the login cannot read resolves to null, not an error.
+             raise _GateAuthError(f"HTTP 404 on graphql {repo}")
+         pr = repository["pullRequest"]
++        if pr["state"] == "CLOSED":
++            receipt.update(classification="closed", merged=False,
++                           detail="PR was closed without merging.")
++            return receipt
+         sha, branch = pr["headRefOid"], pr["baseRefName"]
+         receipt["head_sha"] = sha
+         if not re.fullmatch(r"[0-9a-f]{40}", sha) or pr["state"] not in {"OPEN", "MERGED"}:
+@@ -177,6 +181,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
+         if current["head"]["sha"] != sha or current["base"]["ref"] != branch or (current["state"] == "closed" and not current.get("merged")):
+             receipt.update(classification="stale", detail="PR head/base changed while collecting evidence; retry.")
+             return receipt
++        receipt["merged"] = pr["state"] == "MERGED" and current.get("merged") is True
+         receipt["classification"] = next((x for x in outcomes if x != "success"), "missing" if not outcomes else "success")
+         receipt["ok"] = receipt["classification"] == "success"
+         return receipt
+diff --git a/hermes_cli/kanban_pr_acceptance_store.py b/hermes_cli/kanban_pr_acceptance_store.py
+index bbc56b6725..30cc269dd7 100644
+--- a/hermes_cli/kanban_pr_acceptance_store.py
++++ b/hermes_cli/kanban_pr_acceptance_store.py
+@@ -1,6 +1,9 @@
+ """Persist acceptance with the same ownership snapshot as the terminal write."""
+ from __future__ import annotations
+ 
++import json
++from dataclasses import dataclass
++
+ from hermes_cli.kanban_db_connect import write_txn
+ from hermes_cli.kanban_pr_acceptance import _PR, collect_acceptance
+ 
+@@ -10,6 +13,27 @@ def _snapshot(conn, task_id):
+     return tuple(row) if row else None
+ 
+ 
++def _historical_published_pr(conn, task_id, contract):
++    """Omitted keys inherit; explicit invalid evidence stops the search."""
++    rows = conn.execute(
++        "SELECT metadata FROM task_runs WHERE task_id=? AND metadata IS NOT NULL ORDER BY id DESC",
++        (task_id,),
++    )
++    for row in rows:
++        try:
++            metadata = json.loads(row["metadata"])
++        except (TypeError, json.JSONDecodeError):
++            continue
++        if not isinstance(metadata, dict) or "published_pr" not in metadata:
++            continue
++        published_pr = metadata["published_pr"]
++        match = _PR.fullmatch(published_pr) if isinstance(published_pr, str) else None
++        if match and (contract == published_pr or contract == match[1]):
++            return published_pr
++        return None
++    return None
++
++
+ def prepare_acceptance(conn, task_id, expected_run_id, metadata):
+     snapshot = _snapshot(conn, task_id)
+     if snapshot is None:
+@@ -20,6 +44,8 @@ def prepare_acceptance(conn, task_id, expected_run_id, metadata):
+     if status not in {"running", "ready", "blocked", "review"} or (expected_run_id is not None and run_id != expected_run_id):
+         return False
+     published_pr = metadata.get("published_pr") if isinstance(metadata, dict) else None
++    if not isinstance(metadata, dict) or "published_pr" not in metadata:
++        published_pr = _historical_published_pr(conn, task_id, contract)
+     match = _PR.fullmatch(published_pr) if isinstance(published_pr, str) else None
+     # Publication binds once. Retrying cannot replace the task's PR with a green sibling.
+     if match and contract == match[1]:
+@@ -35,12 +61,78 @@ def prepare_acceptance(conn, task_id, expected_run_id, metadata):
+     return snapshot, collect_acceptance(contract, published_pr, assignee=assignee)
+ 
+ 
++@dataclass(frozen=True)
++class _ReviewSnapshot:
++    task_id: str
++    state: tuple
++    handoffs: tuple
++    event: tuple | None
++    published_pr: str
++
++
++@dataclass(frozen=True)
++class _ReviewAcceptance:
++    snapshot: _ReviewSnapshot
++    receipt: dict
++
++
++def _review_snapshot(conn, task_id):
++    row = conn.execute(
++        "SELECT current_run_id, status, completion_contract, assignee, claim_lock "
++        "FROM tasks WHERE id=?", (task_id,),
++    ).fetchone()
++    if not row or row["status"] != "review" or row["claim_lock"] is not None:
++        return None
++    contract = row["completion_contract"]
++    if not contract or contract == "local-only":
++        return None
++    # Include the newest event even when a metadata-free handoff made no run.
++    event = conn.execute(
++        "SELECT id, run_id, payload FROM task_events WHERE task_id=? "
++        "AND kind='review_requested' ORDER BY id DESC LIMIT 1", (task_id,),
++    ).fetchone()
++    handoffs = []
++    for run in conn.execute(
++        "SELECT id, metadata FROM task_runs WHERE task_id=? "
++        "AND outcome='review_requested' ORDER BY id DESC", (task_id,),
++    ):
++        handoffs.append(tuple(run))
++        try:
++            metadata = json.loads(run["metadata"]) if run["metadata"] is not None else {}
++        except (TypeError, ValueError):
++            return None
++        if not isinstance(metadata, dict):
++            return None
++        if "published_pr" not in metadata:
++            continue
++        url = metadata["published_pr"]
++        match = _PR.fullmatch(url) if isinstance(url, str) else None
++        if not match or contract not in (url, match[1]):
++            return None
++        return _ReviewSnapshot(task_id, tuple(row), tuple(handoffs),
++                               tuple(event) if event else None, url)
++    return None
++
++
+ def record_acceptance(conn, task_id, acceptance):
+     """Called under complete_task's write_txn, before its terminal UPDATE."""
+     from hermes_cli.kanban_db import _append_event
+-    snapshot, receipt = acceptance
+-    if _snapshot(conn, task_id) != snapshot:
+-        return False
++    if isinstance(acceptance, _ReviewAcceptance):
++        review = acceptance.snapshot
++        receipt = acceptance.receipt
++        if (review.task_id != task_id or _review_snapshot(conn, task_id) != review
++                or not receipt.get("ok") or not receipt.get("merged")
++                or receipt.get("pr_url") != review.published_pr):
++            return False
++        # Bind a repo-only contract only after successful evidence, in the
++        # same transaction as completion. Failed polls never mutate the card.
++        conn.execute("UPDATE tasks SET completion_contract=? WHERE id=?",
++                     (review.published_pr, task_id))
++        snapshot = review.state[:3]
++    else:
++        snapshot, receipt = acceptance
++        if _snapshot(conn, task_id) != snapshot:
++            return False
+     _append_event(conn, task_id, "pr_acceptance", receipt, run_id=snapshot[0])
+     if not receipt["ok"]:
+         detail = f"PR acceptance {receipt['classification']}: {receipt.get('detail', '')} {receipt['recovery']}"
+diff --git a/hermes_cli/kanban_pr_reconcile.py b/hermes_cli/kanban_pr_reconcile.py
+new file mode 100644
+index 0000000000..0739e12a34
+--- /dev/null
++++ b/hermes_cli/kanban_pr_reconcile.py
+@@ -0,0 +1,117 @@
++"""Deterministic merged-PR reconciliation, with no GitHub I/O under board locks."""
++from __future__ import annotations
++
++from collections import OrderedDict
++from dataclasses import dataclass
++from pathlib import Path
++import sqlite3
++import threading
++import time
++
++from hermes_constants import hermes_home_key
++from hermes_cli import kanban_db as kb
++from hermes_cli import kanban_db_connect as kbc
++from hermes_cli.kanban_pr_acceptance import collect_acceptance
++from hermes_cli.kanban_pr_acceptance_store import _ReviewAcceptance, _review_snapshot
++
++
++_CACHE_LIMIT = 256
++_POLL_TTL = 60.0
++_MAX_BACKOFF = 900.0
++_MAX_POLLS_PER_TICK = 20
++_CACHE_LOCK = threading.Lock()
++
++
++@dataclass
++class _CachedReceipt:
++    receipt: dict | None = None  # None reserves a single in-flight query.
++    expires: float = 0.0
++    failures: int = 0
++
++
++_CACHE: OrderedDict[tuple, _CachedReceipt] = OrderedDict()
++
++
++def _cache_key(snapshot, db_path):
++    # One board may be served from several homes with different gh identities.
++    return (str(db_path), hermes_home_key(), snapshot.published_pr, snapshot.state[3])
++
++
++def _cached_acceptance(snapshot, db_path, *, allow_query):
++    key = _cache_key(snapshot, db_path)
++    with _CACHE_LOCK:
++        previous = _CACHE.get(key)
++        if previous is not None:
++            _CACHE.move_to_end(key)
++            if previous.receipt is None or time.monotonic() < previous.expires:
++                return previous.receipt, False
++        if not allow_query:
++            return None, False
++        if previous is None and len(_CACHE) >= _CACHE_LIMIT:
++            victim = next((k for k, v in _CACHE.items() if v.receipt is not None), None)
++            if victim is None:
++                return None, False
++            del _CACHE[victim]
++        pending = _CachedReceipt(failures=previous.failures if previous else 0)
++        _CACHE[key] = pending
++    try:
++        receipt = collect_acceptance(snapshot.state[2], snapshot.published_pr,
++                                     assignee=snapshot.state[3])
++    except Exception:
++        # Neither logs nor returned diagnostics may contain provider stderr.
++        receipt = {"ok": False, "classification": "infra"}
++    with _CACHE_LOCK:
++        if receipt["classification"] in {"auth", "infra"}:
++            pending.failures = min(pending.failures + 1, 5)
++            delay = min(_POLL_TTL * 2 ** (pending.failures - 1), _MAX_BACKOFF)
++        else:
++            pending.failures = 0
++            delay = _POLL_TTL
++        pending.receipt = receipt
++        pending.expires = time.monotonic() + delay
++        _CACHE.move_to_end(key)
++    return receipt, True
++
++
++def snapshot_reviews(conn, db_path):
++    # A caller can hand us a connection for a different board than its ambient
++    # board selection. Its lock cannot protect this connection's mutations.
++    try:
++        if not any(row[1] == "main" and row[2] and Path(row[2]).resolve() == db_path
++                   for row in conn.execute("PRAGMA database_list")):
++            return []
++    except (OSError, sqlite3.Error, ValueError):
++        return []
++    return [snapshot for row in conn.execute(
++        "SELECT id FROM tasks WHERE status='review' AND completion_contract IS NOT NULL "
++        "AND completion_contract != 'local-only' AND claim_lock IS NULL ORDER BY id"
++    ) if (snapshot := _review_snapshot(conn, row["id"])) is not None]
++
++
++def reconcile_reviews(conn, db_path, snapshots, result):
++    # Missing and oldest receipts go first, even when a tick outlasts the TTL.
++    # Otherwise a full poll budget could repeatedly starve the same tail.
++    with _CACHE_LOCK:
++        snapshots = sorted(snapshots, key=lambda snapshot: (
++            _CACHE[_cache_key(snapshot, db_path)].expires
++            if _cache_key(snapshot, db_path) in _CACHE else 0.0))
++    polls = 0
++    for snapshot in snapshots:
++        receipt, queried = _cached_acceptance(snapshot, db_path, allow_query=polls < _MAX_POLLS_PER_TICK)
++        polls += queried
++        if receipt is None:
++            continue
++        classification = "open" if receipt.get("ok") and not receipt.get("merged") else receipt["classification"]
++        if not receipt.get("ok") or not receipt.get("merged"):
++            result.pr_reconciliation.append((snapshot.task_id, snapshot.published_pr, classification))
++            continue
++        with kbc._dispatch_tick_lock(db_path) as held:
++            if not held or _review_snapshot(conn, snapshot.task_id) != snapshot:
++                continue
++            if kb._complete_task_with_acceptance(
++                conn, snapshot.task_id,
++                summary="Bound GitHub PR merged with required checks passing.",
++                metadata={"published_pr": snapshot.published_pr, "source": "pr_reconciliation"},
++                acceptance=_ReviewAcceptance(snapshot, receipt),
++            ):
++                result.completed_merged_prs.append(snapshot.task_id)
+diff --git a/tests/hermes_cli/test_kanban_pr_acceptance.py b/tests/hermes_cli/test_kanban_pr_acceptance.py
+index a31fbac7af..c93b347a96 100644
+--- a/tests/hermes_cli/test_kanban_pr_acceptance.py
++++ b/tests/hermes_cli/test_kanban_pr_acceptance.py
+@@ -18,10 +18,13 @@ def github(tmp_path, monkeypatch):
+     class Handler(BaseHTTPRequestHandler):
+         def do_GET(self):
+             state["requests"].append(self.path)
++            if state.get("http_error"):
++                self.send_error(state["http_error"], "fixture-secret-must-not-escape")
++                return
+             sha = state["head"]
+             if self.path == "/graphql":
+                 value = {"data": {"repository": {"pullRequest": {
+-                    "headRefOid": sha, "baseRefName": "main", "state": "OPEN",
++                    "headRefOid": sha, "baseRefName": "main", "state": state.get("pr_state", "OPEN"),
+                     "baseRef": {"branchProtectionRule": {"requiredStatusChecks": [
+                         {"context": "required", "app": {"databaseId": 1}}]}}}}}}
+             elif "/rules/branches/" in self.path:
+@@ -43,7 +46,9 @@ def github(tmp_path, monkeypatch):
+             elif "/statuses" in self.path:
+                 value = [[]]
+             elif "/pulls/" in self.path:
+-                value = {"head": {"sha": sha}, "base": {"ref": "main"}, "state": "open"}
++                value = {"head": {"sha": sha}, "base": {"ref": "main"},
++                         "state": "open" if state.get("pr_state", "OPEN") == "OPEN" else "closed",
++                         "merged": state.get("pr_state") == "MERGED"}
+             else:
+                 self.send_error(404)
+                 return
+@@ -62,7 +67,10 @@ def github(tmp_path, monkeypatch):
+     gh = shim / "gh"
+     gh.write_text(f"#!{sys.executable}\nimport sys,urllib.request\n"
+                   f"u='http://127.0.0.1:{server.server_port}/'+sys.argv[2]\n"
+-                  "print(urllib.request.urlopen(u).read().decode())\n")
++                  "try: print(urllib.request.urlopen(u).read().decode())\n"
++                  "except urllib.error.HTTPError as e:\n"
++                  " print('HTTP '+str(e.code)+' '+e.read().decode(), file=sys.stderr)\n"
++                  " sys.exit(1)\n")
+     gh.chmod(0o755)
+     monkeypatch.setenv("PATH", str(shim) + os.pathsep + os.environ["PATH"])
+     monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+@@ -230,3 +238,41 @@ def test_assigned_card_with_unresolvable_profile_is_auth_not_ambient(tmp_path, m
+             "SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance'", (tid,)).fetchone()[0])
+     assert receipt["classification"] == "auth"
+     assert "'ghost'" in receipt["detail"] and "cannot be resolved" in receipt["detail"]
++
++
++@pytest.mark.platforms("linux")
++def test_completion_reuses_bound_pr_receipt_from_prior_run(github):
++    published_pr = "https://github.com/acme/repo/pull/7"
++    with connect() as conn:
++        tid = kb.create_task(conn, title="rework", completion_contract="acme/repo")
++        kb._synthesize_ended_run(
++            conn, tid, outcome="review_requested", metadata={"published_pr": published_pr},
++        )
++        assert kb.block_task(conn, tid, reason="Waiting for operator", kind="needs_input")
++
++        assert kb.complete_task(conn, tid, summary="Approved after rework")
++        task = kb.get_task(conn, tid)
++        assert task is not None
++        assert task.status == "done"
++
++        receipt = json.loads(conn.execute(
++            "SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance' ORDER BY id DESC LIMIT 1",
++            (tid,),
++        ).fetchone()[0])
++        assert receipt["ok"]
++
++
++@pytest.mark.platforms("linux")
++@pytest.mark.parametrize("source", ["handoff", "caller"])
++@pytest.mark.parametrize("value", [None, 42, "broken", "https://github.com/other/repo/pull/8", "https://github.com/acme/repo/pull/8", "omitted"])
++def test_prior_receipt_does_not_override_explicit_evidence(github, source, value):
++    url = "https://github.com/acme/repo/pull/7"
++    with connect() as conn:
++        tid = kb.create_task(conn, title="receipt", completion_contract=url)
++        kb._synthesize_ended_run(conn, tid, outcome="review_requested", metadata={"published_pr": url})
++        metadata = {} if value == "omitted" else {"published_pr": value}
++        if source == "handoff":
++            kb._synthesize_ended_run(conn, tid, outcome="review_requested", metadata=metadata)
++            metadata = None
++        assert kb.complete_task(conn, tid, summary="Approved", metadata=metadata) is (value == "omitted")
++        assert (kb.get_task(conn, tid).status == "done") is (value == "omitted")
+diff --git a/tests/hermes_cli/test_kanban_pr_reconcile.py b/tests/hermes_cli/test_kanban_pr_reconcile.py
+new file mode 100644
+index 0000000000..cd0b67106d
+--- /dev/null
++++ b/tests/hermes_cli/test_kanban_pr_reconcile.py
+@@ -0,0 +1,261 @@
++"""Dispatcher reconciliation through real SQLite, gh subprocesses and HTTP."""
++import json
++
++import pytest
++
++from hermes_cli import kanban_db as kb
++from hermes_cli import kanban_db_dispatch as dispatch
++from hermes_cli.kanban_db_connect import connect
++from tests.hermes_cli.test_kanban_pr_acceptance import github  # noqa: F401
++
++
++URL = "https://github.com/acme/repo/pull/7"
++
++
++@pytest.fixture(autouse=True)
++def reset_cache():
++    from hermes_cli import kanban_pr_reconcile as reconcile
++    cache = getattr(reconcile, "_CACHE", {})
++    cache.clear()
++    yield
++    cache.clear()
++
++
++def review(conn, contract="acme/repo", metadata=None):
++    tid = kb.create_task(conn, title="Publish", completion_contract=contract)
++    assert kb.request_review(conn, tid, summary="Ready for review", metadata=(
++        {"published_pr": URL} if metadata is None else metadata))
++    return tid
++
++
++def tick(conn, **kwargs):
++    # No worker processes are needed to reconcile parked reviews.
++    return dispatch.dispatch_once(conn, max_spawn=0, **kwargs)
++
++
++def events(conn, tid):
++    return [tuple(row) for row in conn.execute(
++        "SELECT * FROM task_events WHERE task_id=? ORDER BY id", (tid,))]
++
++
++@pytest.mark.platforms("linux")
++def test_dispatch_completes_verified_merged_review_once(github):
++    github["pr_state"] = "MERGED"
++    with connect() as conn:
++        tid = review(conn)
++        child = kb.create_task(conn, title="Dependent", parents=[tid])
++        assert kb.get_task(conn, child).status == "todo"
++        result = tick(conn)
++        assert kb.get_task(conn, tid).status == "done"
++        assert kb.get_task(conn, child).status == "ready"
++        assert result.completed_merged_prs == [tid]
++        receipt = json.loads(conn.execute(
++            "SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance'", (tid,)
++        ).fetchone()[0])
++        assert receipt["ok"] and receipt["merged"] and receipt["head_sha"] == github["head"]
++        before = events(conn, tid)
++        requests = list(github["requests"])
++        assert tick(conn).completed_merged_prs == []
++        assert events(conn, tid) == before
++        assert github["requests"] == requests
++
++
++@pytest.mark.platforms("linux")
++@pytest.mark.parametrize("state,head,conclusion,classification", [
++    ("OPEN", "a" * 40, "success", "open"),
++    ("CLOSED", None, "success", "closed"),
++    ("MERGED", "a" * 40, "failure", "failure"),
++    ("MERGED", "a" * 40, "pending", "pending"),
++])
++def test_nonaccepting_polls_are_read_only_and_cached(github, state, head, conclusion, classification):
++    github.update(pr_state=state, head=head, conclusion=conclusion)
++    with connect() as conn:
++        tid = review(conn)
++        before = events(conn, tid)
++        task = kb.get_task(conn, tid)
++        first = tick(conn)
++        requests = list(github["requests"])
++        second = tick(conn)
++        assert kb.get_task(conn, tid) == task
++        assert events(conn, tid) == before
++        assert first.pr_reconciliation == second.pr_reconciliation == [(tid, URL, classification)]
++        assert github["requests"] == requests
++
++
++@pytest.mark.platforms("linux")
++@pytest.mark.parametrize("value", ["omitted", None, 42, "broken",
++                                  "https://github.com/other/repo/pull/8",
++                                  "https://github.com/acme/repo/pull/8"])
++def test_review_receipt_inheritance_has_explicit_barriers(github, value):
++    github["pr_state"] = "MERGED"
++    with connect() as conn:
++        tid = review(conn, contract=URL)
++        kb._synthesize_ended_run(conn, tid, outcome="review_requested",
++                                metadata={} if value == "omitted" else {"published_pr": value})
++        tick(conn)
++        assert (kb.get_task(conn, tid).status == "done") is (value == "omitted")
++        assert bool(github["requests"]) is (value == "omitted")
++
++
++@pytest.mark.platforms("linux")
++@pytest.mark.parametrize("mode", ["dry_run", "no_lock_key", "null_lock_key", "wrong_lock_key"])
++def test_no_poll_without_write_permission_and_stable_lock(github, monkeypatch, mode):
++    from hermes_cli import kanban_pr_reconcile as reconcile
++    github["pr_state"] = "MERGED"
++    with connect() as conn:
++        tid = review(conn)
++        before = events(conn, tid)
++        if mode == "no_lock_key":
++            def unavailable(**kwargs):
++                raise OSError("unavailable")
++            monkeypatch.setattr(kb, "kanban_db_path", unavailable)
++        elif mode == "null_lock_key":
++            monkeypatch.setattr(kb, "kanban_db_path", lambda **kwargs: None)
++        elif mode == "wrong_lock_key":
++            wrong = kb.kanban_db_path().with_name("other.db")
++            monkeypatch.setattr(kb, "kanban_db_path", lambda **kwargs: wrong)
++        result = tick(conn, dry_run=mode == "dry_run")
++        assert not result.skipped_locked
++        assert kb.get_task(conn, tid).status == "review"
++        assert events(conn, tid) == before
++        assert github["requests"] == []
++        assert not reconcile._CACHE
++
++
++@pytest.mark.platforms("linux")
++@pytest.mark.parametrize("phase", ["http", "transaction"])
++def test_replaced_handoff_cannot_complete_with_stale_evidence(github, monkeypatch, phase):
++    from hermes_cli import kanban_pr_acceptance_store as store
++    github["pr_state"] = "MERGED"
++    with connect() as conn:
++        tid = review(conn)
++        def replace(target):
++            kb._synthesize_ended_run(target, tid, outcome="review_requested",
++                                    metadata={"published_pr": URL.replace("/7", "/8")})
++        if phase == "http":
++            def race():
++                with connect() as rival:
++                    replace(rival)
++            github["race"] = race
++        else:
++            original = store.record_acceptance
++            def record(target, task_id, acceptance):
++                assert target.in_transaction
++                replace(target)
++                return original(target, task_id, acceptance)
++            monkeypatch.setattr(store, "record_acceptance", record)
++        assert tick(conn).completed_merged_prs == []
++        task = kb.get_task(conn, tid)
++        assert task.status == "review" and task.completion_contract == "acme/repo"
++        assert not conn.execute("SELECT id FROM task_events WHERE task_id=? AND kind='pr_acceptance'",
++                                (tid,)).fetchall()
++
++
++@pytest.mark.platforms("linux")
++@pytest.mark.parametrize("error,classification", [(401, "auth"), (500, "infra")])
++def test_remote_failures_are_read_only_sanitized_and_back_off(github, monkeypatch, caplog, error, classification):
++    from hermes_cli import kanban_pr_reconcile as reconcile
++    clock = [1000.0]
++    monkeypatch.setattr(reconcile.time, "monotonic", lambda: clock[0])
++    github["http_error"] = error
++    with connect() as conn:
++        tid = review(conn)
++        before, task = events(conn, tid), kb.get_task(conn, tid)
++        for attempt in range(7):
++            result = tick(conn)
++            assert result.pr_reconciliation == [(tid, URL, classification)]
++            count = len(github["requests"])
++            cached = next(iter(reconcile._CACHE.values()))
++            delay = cached.expires - clock[0]
++            assert delay == min(60 * 2 ** min(attempt, 4), 900)
++            assert tick(conn).pr_reconciliation == result.pr_reconciliation
++            assert len(github["requests"]) == count
++            clock[0] = cached.expires
++        assert events(conn, tid) == before and kb.get_task(conn, tid) == task
++        assert "fixture-secret" not in repr(result) + caplog.text
++        github.pop("http_error")
++        github["pr_state"] = "MERGED"
++        assert tick(conn).completed_merged_prs == [tid]
++
++
++@pytest.mark.platforms("linux")
++def test_blocked_github_does_not_hold_board_lock_or_stop_sibling_tick(github, monkeypatch):
++    from concurrent.futures import ThreadPoolExecutor
++    from threading import Event
++    from hermes_cli import kanban_db_connect as kbc
++    entered, release = Event(), Event()
++    github["pr_state"] = "MERGED"
++    def block_http():
++        entered.set()
++        assert release.wait(10)
++    github["race"] = block_http
++    monkeypatch.setattr(dispatch, "_memory_pressure_level", lambda: "ok")
++    with connect() as conn:
++        tid = review(conn)
++        def background_tick():
++            with connect() as worker:
++                return tick(worker)
++        with ThreadPoolExecutor(max_workers=1) as pool:
++            future = pool.submit(background_tick)
++            try:
++                assert entered.wait(10)
++                with kbc._dispatch_tick_lock(kb.kanban_db_path()) as held:
++                    assert held
++                queued = kb.create_task(conn, title="ordinary dispatch")
++                result = dispatch.dispatch_once(conn, max_spawn=1)
++                assert not result.skipped_locked
++                assert queued in result.skipped_unassigned
++                assert kb.get_task(conn, tid).status == "review"
++            finally:
++                release.set()
++            assert future.result(timeout=10).completed_merged_prs == [tid]
++        assert github["requests"].count("/graphql") == 1
++
++
++@pytest.mark.platforms("linux")
++def test_cache_expiry_and_eviction_are_thread_safe(github, monkeypatch):
++    from concurrent.futures import ThreadPoolExecutor
++    from dataclasses import replace
++    from hermes_cli import kanban_pr_reconcile as reconcile
++    monkeypatch.setattr(reconcile, "_CACHE_LIMIT", 4)
++    with connect() as conn:
++        tid = review(conn)
++        snapshot = reconcile.snapshot_reviews(conn, kb.kanban_db_path().resolve())[0]
++        path = kb.kanban_db_path()
++        tick(conn)
++        first = len(github["requests"])
++        # Expiry forces a fresh read, but the intervening tick is cached.
++        tick(conn)
++        assert len(github["requests"]) == first
++        with reconcile._CACHE_LOCK:
++            next(iter(reconcile._CACHE.values())).expires = 0
++        tick(conn)
++        assert len(github["requests"]) > first
++        def fetch(number):
++            bound = replace(snapshot, published_pr=URL.replace("/7", f"/{number}"))
++            board_path = path.with_name(f"board-{number % 3}.db")
++            return reconcile._cached_acceptance(bound, board_path, allow_query=True)
++        with ThreadPoolExecutor(max_workers=8) as pool:
++            results = list(pool.map(fetch, list(range(1, 13)) * 2))
++        assert any(queried for _, queried in results)
++        assert len(reconcile._CACHE) <= 4
++        assert all(entry.receipt is not None for entry in reconcile._CACHE.values())
++        assert kb.get_task(conn, tid).status == "review"
++
++
++@pytest.mark.platforms("linux")
++def test_poll_budget_does_not_starve_later_reviews(github, monkeypatch):
++    from types import SimpleNamespace
++    from hermes_cli import kanban_pr_reconcile as reconcile
++    clock = [1000.0]
++    monkeypatch.setattr(reconcile, "time", SimpleNamespace(monotonic=lambda: clock[0]))
++    monkeypatch.setattr(reconcile, "_MAX_POLLS_PER_TICK", 2)
++    with connect() as conn:
++        for number in range(1, 4):
++            review(conn, metadata={"published_pr": URL.replace("/7", f"/{number}")})
++        tick(conn)
++        assert github["requests"].count("/graphql") == 2
++        clock[0] += 61
++        tick(conn)
++        assert {path for path in github["requests"] if "/pulls/" in path} == {
++            f"/repos/acme/repo/pulls/{number}" for number in range(1, 4)}
+diff --git a/website/docs/user-guide/features/kanban.md b/website/docs/user-guide/features/kanban.md
+index 66e7224230..11553b87b8 100644
+--- a/website/docs/user-guide/features/kanban.md
++++ b/website/docs/user-guide/features/kanban.md
+@@ -52,9 +52,28 @@ Declare PR work at creation with `--completion-contract OWNER/REPO` (or an exact
+ accepts the same `completion_contract`. Use `local-only` for intentionally local
+ work; existing and undeclared cards retain that default. Prose URLs are not policy.
+ 
+-After publishing, pass `metadata.published_pr` to completion. The first matching
+-URL binds the card permanently; retries cannot substitute a green sibling PR.
+-CLI `show --json` and `kanban_show` expose the persisted contract.
++After publishing, pass `metadata.published_pr` to completion or the review handoff.
++If completion omits that key, Hermes reuses saved run evidence, newest first.
++An explicit invalid or conflicting value blocks fallback, including an explicit
++null. The first accepted matching URL binds the card permanently; retries cannot
++substitute a green sibling PR. CLI `show --json` and `kanban_show` expose the
++persisted contract.
++
++The dispatcher also reconciles unclaimed `review` cards with PR contracts.
++It takes the PR URL only from saved `review_requested` handoffs. A newer handoff
++that omits the key inherits prior evidence; an explicit invalid or mismatched
++value stops reconciliation. A verified merged PR with successful required checks
++completes the card through the same acceptance gate. Open and closed-unmerged PRs
++stay in review. Other task statuses and `local-only` cards are not auto-completed.
++
++Polling runs outside the board dispatch lock, with at most 20 PR lookups per tick.
++Receipts are cached for 60 seconds across ticks; authentication and infrastructure
++failures back off to at most 15 minutes. The cache is bounded to 256 entries and
++separates boards and profile identities. Dry runs do not poll or change the cache.
++Before completion, Hermes rechecks the exact saved handoff inside the completion
++transaction, so a replacement handoff cannot inherit an earlier poll's acceptance.
++Failed polls leave the card and event history unchanged. Dispatch results expose
++`completed_merged_prs` and sanitized `pr_reconciliation` diagnostics.
+ 
+ The shared `complete_task` boundary covers worker tools, CLI, review approval and
+ dashboard completion. It reads classic branch protection and active ruleset

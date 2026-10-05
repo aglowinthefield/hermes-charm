@@ -1,0 +1,287 @@
+diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
+index aea45ba..b394e2a 100644
+--- a/hermes_cli/kanban_db.py
++++ b/hermes_cli/kanban_db.py
+@@ -1198,6 +1198,96 @@ def _canonical_assignee(assignee: Optional[str]) -> Optional[str]:
+     return normalize_profile_name(assignee)
+ 
+ 
++_SKILL_FRONTMATTER_NAME = re.compile(
++    r"^name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9._-]*)",
++    re.MULTILINE,
++)
++
++
++def _add_skill_md_names(path: Path, names: set[str]) -> None:
++    names.add(path.parent.name)
++    try:
++        text = path.read_text(encoding="utf-8", errors="replace")[:2000]
++    except OSError:
++        return
++    match = _SKILL_FRONTMATTER_NAME.search(text)
++    if match:
++        names.add(match.group(1))
++
++
++def _collect_skill_names(
++    root: Path, names: set[str], seen: Optional[set[Path]] = None
++) -> None:
++    """Walk a skills tree, following directory symlinks, collecting names."""
++    visited = seen if seen is not None else set()
++    try:
++        resolved = root.resolve()
++    except OSError:
++        return
++    if resolved in visited:
++        return
++    visited.add(resolved)
++    if resolved.is_file() and resolved.name == "SKILL.md":
++        _add_skill_md_names(resolved, names)
++        return
++    if not resolved.is_dir():
++        return
++    skill_md = resolved / "SKILL.md"
++    if skill_md.is_file():
++        _add_skill_md_names(skill_md, names)
++        return
++    try:
++        children = list(resolved.iterdir())
++    except OSError:
++        return
++    for child in children:
++        _collect_skill_names(child, names, visited)
++
++
++def _assignee_skill_catalog(assignee: Optional[str]) -> Optional[set[str]]:
++    """Skill names the assignee profile can ``--skills`` load, or None if unknown.
++
++    ``None`` means we cannot see a profile directory, so the pin list is left
++    alone (review-dispatch tests and not-yet-created assignees). An existing
++    profile with no ``skills/`` tree is an empty catalog — every pin is dropped.
++    """
++    if not assignee:
++        return None
++    try:
++        from hermes_cli.profiles import get_profile_dir
++
++        home = get_profile_dir(assignee)
++    except Exception:
++        return None
++    if not home.is_dir():
++        return None
++    names: set[str] = set()
++    skills_root = home / "skills"
++    if skills_root.exists():
++        _collect_skill_names(skills_root, names)
++    return names
++
++
++def _filter_skills_for_assignee(
++    assignee: Optional[str], skills: list[str]
++) -> tuple[list[str], list[str]]:
++    """Split *skills* into (kept, dropped) against the assignee catalog.
++
++    When the catalog cannot be resolved, every name is kept.
++    """
++    catalog = _assignee_skill_catalog(assignee)
++    if catalog is None:
++        return list(skills), []
++    kept: list[str] = []
++    dropped: list[str] = []
++    for name in skills:
++        if name in catalog:
++            kept.append(name)
++        else:
++            dropped.append(name)
++    return kept, dropped
++
++
+ def _resolve_project_link(
+     conn: sqlite3.Connection, project_id: Optional[str], project_source_task_id: Optional[str],
+     workspace_kind: str, workspace_path: Optional[str],
+@@ -1391,6 +1481,14 @@ def create_task(
+     )
+     parents = tuple(p for p in parents if p)
+     skills_list = _normalize_task_skills(skills)
++    dropped_skills: list[str] = []
++    if skills_list:
++        skills_list, dropped_skills = _filter_skills_for_assignee(
++            assignee, skills_list
++        )
++        if not skills_list:
++            skills_list = None
++
+     # Idempotency check BEFORE the write txn (no lock held); a concurrent-create
+     # race may insert twice, the next lookup stabilises on the newest.
+     if idempotency_key:
+@@ -1466,6 +1564,7 @@ def create_task(
+                         "branch_name": branch_name,
+                         "project_id": project_id,
+                         "skills": list(skills_list) if skills_list else None,
++                        "dropped_skills": list(dropped_skills) or None,
+                         "goal_mode": bool(goal_mode) or None,
+                         "model_override": model_override,
+                         "provider_override": provider_override,
+diff --git a/hermes_cli/kanban_db_dispatch.py b/hermes_cli/kanban_db_dispatch.py
+index d33d8b5..3fb1ce7 100644
+--- a/hermes_cli/kanban_db_dispatch.py
++++ b/hermes_cli/kanban_db_dispatch.py
+@@ -2764,8 +2764,20 @@ def _worker_argv(task: Task, profile_arg: str, hermes_home: Optional[str]) -> li
+         "--accept-hooks",
+     ]
+     # One `--skills X` pair per name: easier to read in `ps` and avoids quoting
+-    # ambiguity if a skill name contains unusual chars.
+-    for sk in task.skills or ():
++    # ambiguity if a skill name contains unusual chars. Names the assignee
++    # cannot load are dropped with a warning instead of crashing the worker on
++    # boot (cards created before create-time filtering, or via the CLI).
++    spawn_skills, dropped_spawn_skills = _kb._filter_skills_for_assignee(
++        task.assignee, list(task.skills or [])
++    )
++    if dropped_spawn_skills:
++        _kb._log.warning(
++            "Dropping unknown skills for assignee %s on task %s: %s",
++            task.assignee,
++            task.id,
++            ", ".join(dropped_spawn_skills),
++        )
++    for sk in spawn_skills:
+         if sk:
+             cmd.extend(["--skills", sk])
+     if task.model_override:
+diff --git a/tests/hermes_cli/test_kanban_core_functionality.py b/tests/hermes_cli/test_kanban_core_functionality.py
+index 89bdf4b..49621c1 100644
+--- a/tests/hermes_cli/test_kanban_core_functionality.py
++++ b/tests/hermes_cli/test_kanban_core_functionality.py
+@@ -10,6 +10,7 @@ parity across every registered verb.
+ 
+ from __future__ import annotations
+ 
++import json
+ import os
+ import time
+ from pathlib import Path
+@@ -1395,3 +1396,123 @@ def test_dead_worker_reap_reads_the_log_of_the_dispatching_board(kanban_home):
+     finally:
+         conn.close()
+ 
++
++# ---------------------------------------------------------------------------
++# Skill pins the assignee cannot load are dropped, never fatal
++# (hand-ported from upstream PR #89601)
++# ---------------------------------------------------------------------------
++
++
++def _plant_profile_skill(home: Path, profile: str, skill_name: str, category: str = "general") -> Path:
++    """Write a minimal SKILL.md the assignee catalog scanner can see."""
++    if profile == "default":
++        root = home / "skills" / category / skill_name
++    else:
++        root = home / "profiles" / profile / "skills" / category / skill_name
++    root.mkdir(parents=True, exist_ok=True)
++    (root / "SKILL.md").write_text(
++        f"---\nname: {skill_name}\ndescription: test fixture\n---\n\n# {skill_name}\n",
++        encoding="utf-8",
++    )
++    return root
++
++
++def test_create_task_drops_skills_missing_from_assignee_catalog(kanban_home):
++    """Pinning a skill the assignee cannot load must not be stored.
++
++    That used to spawn ``hermes --skills <unknown>`` and crash the worker
++    on boot when every pinned name was missing from the profile.
++    """
++    _plant_profile_skill(kanban_home, "orch", "human-in-loop-agent-graphs")
++    conn = kbc.connect()
++    try:
++        tid = kb.create_task(
++            conn,
++            title="drop unknown pins",
++            assignee="orch",
++            skills=["human-in-loop-agent-graphs", "revenueos"],
++        )
++        task = kb.get_task(conn, tid)
++        assert task is not None
++        payload = json.loads(
++            conn.execute(
++                "SELECT payload FROM task_events WHERE task_id = ? AND kind = 'created'",
++                (tid,),
++            ).fetchone()[0]
++        )
++    finally:
++        conn.close()
++
++    assert task.skills == ["human-in-loop-agent-graphs"]
++    assert payload.get("dropped_skills") == ["revenueos"]
++
++
++def test_create_task_keeps_skills_when_assignee_has_no_catalog(kanban_home):
++    """No profile dir means we cannot tell — leave the pin list alone.
++
++    Review-dispatch tests (and first-time assignees) rely on this: they
++    pin skills without planting a profile tree.
++    """
++    conn = kbc.connect()
++    try:
++        tid = kb.create_task(
++            conn,
++            title="unknown assignee",
++            assignee="ghost",
++            skills=["domain-specific-review"],
++        )
++        task = kb.get_task(conn, tid)
++        assert task is not None
++    finally:
++        conn.close()
++
++    assert task.skills == ["domain-specific-review"]
++
++
++def test_create_task_sees_symlinked_skill_on_assignee(kanban_home):
++    """A skill installed as a symlink into the profile still counts as present."""
++    real = _plant_profile_skill(kanban_home, "default", "hermes-profiles", "autonomous-ai-agents")
++    dest_parent = kanban_home / "profiles" / "orch" / "skills" / "autonomous-ai-agents"
++    dest_parent.mkdir(parents=True)
++    os.symlink(real, dest_parent / "hermes-profiles")
++
++    conn = kbc.connect()
++    try:
++        tid = kb.create_task(
++            conn,
++            title="symlink pin",
++            assignee="orch",
++            skills=["hermes-profiles", "revenueos"],
++        )
++        task = kb.get_task(conn, tid)
++        assert task is not None
++    finally:
++        conn.close()
++
++    assert task.skills == ["hermes-profiles"]
++
++
++def test_worker_argv_drops_unknown_skills(kanban_home):
++    """Cards created before create-time filtering are still safe at spawn."""
++    _plant_profile_skill(kanban_home, "orch", "human-in-loop-agent-graphs")
++    conn = kbc.connect()
++    try:
++        tid = kb.create_task(
++            conn,
++            title="spawn filter",
++            assignee="orch",
++            skills=["human-in-loop-agent-graphs"],
++        )
++        # Simulate a legacy card that bypassed create-time filtering.
++        conn.execute(
++            "UPDATE tasks SET skills = ? WHERE id = ?",
++            (json.dumps(["human-in-loop-agent-graphs", "revenueos"]), tid),
++        )
++        task = kb.get_task(conn, tid)
++        assert task is not None
++    finally:
++        conn.close()
++
++    argv = kbd._worker_argv(task, "orch", None)
++    skill_args = [argv[i + 1] for i, part in enumerate(argv[:-1]) if part == "--skills"]
++    assert skill_args == ["human-in-loop-agent-graphs"]

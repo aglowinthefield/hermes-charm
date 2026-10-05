@@ -1,0 +1,47 @@
+name: Charm compatibility
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 9 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: charm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - run: python3 -m unittest discover -s tests -v
+      - run: sh -n scripts/local-patches-ensure.sh && sh -n scripts/charm-prestart.sh
+      - run: git diff --check
+  native:
+    name: Native Hermes (${{ matrix.hermes-ref }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        hermes-ref: [f5a9361dcc66b0b972fd488b83129561509b3486, main]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: charm
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ matrix.hermes-ref }}
+          path: hermes
+      - uses: astral-sh/setup-uv@v6
+      - name: Prepare upstream's locked runtime
+        working-directory: hermes
+        run: uv sync --frozen --no-default-groups --python 3.14
+      - name: Load Charm through native discovery in isolated homes
+        run: python3 charm/scripts/runtime_smoke.py "$GITHUB_WORKSPACE/hermes/.venv/bin/hermes"
