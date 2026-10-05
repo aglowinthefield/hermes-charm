@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -43,7 +44,7 @@ class SafetyTests(unittest.TestCase):
         (self.patches / 'pins.json').write_text(json.dumps(pins))
 
     def run_manager(self, *args):
-        return subprocess.run(['sh', str(HERE / 'local-patches-ensure.sh'), *args],
+        return subprocess.run([sys.executable, str(HERE.parent / 'local_patches.py'), *args],
                               env=self.env, text=True, capture_output=True)
 
     def test_failed_batch_never_applies_earlier_patch(self):
@@ -170,6 +171,65 @@ class SafetyTests(unittest.TestCase):
         (self.patches / 'pins.json').unlink()
         self.assertNotEqual(self.run_manager().returncode, 0)
 
+    def test_ambiguous_patch_state_refuses_entire_operation(self):
+        before = ''.join(f'lead{i}\n' for i in range(5)) + 'two\n' + ''.join(f'tail{i}\n' for i in range(5))
+        after = before.replace('two\n', 'TWO\n')
+        (self.agent / 'f.txt').write_text(before)
+        (self.agent / 'g.txt').write_text('old\n')
+        self.git('add', '--', 'f.txt', 'g.txt')
+        (self.agent / 'f.txt').write_text(after)
+        ambiguous = self.git('diff', '--', 'f.txt').stdout
+        (self.agent / 'f.txt').write_text(before)
+        (self.agent / 'g.txt').write_text('new\n')
+        clean = self.git('diff', '--', 'g.txt').stdout
+        (self.agent / 'g.txt').write_text('old\n')
+        self.configure({'clean': clean})
+        installed = self.run_manager()
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        self.configure({'ambiguous': ambiguous, 'clean': clean})
+        duplicate = before + '\n' + after
+        (self.agent / 'f.txt').write_text(duplicate)
+        # Both directions genuinely match different blocks in the same file.
+        for direction in ([], ['-R']):
+            checked = subprocess.run(['git', '-C', str(self.agent), 'apply', '--check', *direction],
+                                     input=ambiguous, capture_output=True, text=True)
+            self.assertEqual(checked.returncode, 0, checked.stderr)
+        index = (self.agent / '.git/index').read_bytes()
+        state = self.root / 'state/status'
+        receipt = state.read_bytes()
+        for selection in (['--disable', 'ambiguous', '--disable', 'clean'], []):
+            for mode in (['--check'], []):
+                with self.subTest(selection=selection, mode=mode):
+                    result = self.run_manager(*mode, *selection)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn('Ambiguous patch state', result.stderr)
+                    self.assertEqual((self.agent / 'f.txt').read_text(), duplicate)
+                    self.assertEqual((self.agent / 'g.txt').read_text(), 'new\n')
+                    self.assertEqual((self.agent / '.git/index').read_bytes(), index)
+                    self.assertEqual(state.read_bytes(), receipt)
+
+    def test_disable_removes_applied_patch_only_on_explicit_apply(self):
+        self.configure({'good': self.good})
+        self.assertEqual(self.run_manager().returncode, 0)
+        index = (self.agent / '.git/index').read_bytes()
+        (self.agent / 'unrelated').write_text('operator edit')
+        checked = self.run_manager('--check', '--disable', 'good')
+        self.assertEqual(checked.returncode, 0, checked.stderr)
+        self.assertEqual(json.loads(checked.stdout)['removing'], ['good'])
+        self.assertEqual((self.agent / 'f.txt').read_text(), 'one\nTWO\nthree\n')
+        applied = self.run_manager('--disable', 'good')
+        self.assertEqual(applied.returncode, 0, applied.stderr)
+        report = json.loads(applied.stdout)
+        self.assertEqual(report['patches'][0]['state'], 'pending-removal')
+        self.assertEqual((self.agent / 'f.txt').read_text(), 'one\ntwo\nthree\n')
+        self.assertEqual((self.agent / '.git/index').read_bytes(), index)
+        self.assertEqual((self.agent / 'unrelated').read_text(), 'operator edit')
+        again = self.run_manager('--disable', 'good')
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(json.loads(again.stdout)['removing'], [])
+        self.assertEqual(self.run_manager().returncode, 0)
+        self.assertEqual((self.agent / 'f.txt').read_text(), 'one\nTWO\nthree\n')
+
 
 class InventoryTests(unittest.TestCase):
     def test_active_inventory_has_pinned_parseable_artifacts(self):
@@ -179,6 +239,12 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(entries)
         self.assertTrue(paths)
         self.assertEqual(len(entries), len({entry[0] for entry in entries}))
+
+
+    def test_catalog_manifest_and_readme_match_generated_views(self):
+        result = subprocess.run([sys.executable, str(HERE / 'sync_catalog.py'), '--check'],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
 
 if __name__ == '__main__':

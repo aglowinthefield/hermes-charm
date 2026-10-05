@@ -1,0 +1,204 @@
+{
+  "upstream_checked_at": "2026-10-05T02:52:11Z",
+  "customizations": [
+    {
+      "id": "worker-memory-cap",
+      "title": "Worker resource policy",
+      "summary": "Override the default 4 GiB worker ceiling within host/cgroup bounds and select a shared worker slice.",
+      "default_enabled": true,
+      "maintenance": "homebrew",
+      "sources": [],
+      "note": "Local operator resource policy; no upstream submission is planned for this customization."
+    },
+    {
+      "id": "cron-worker-bootstrap",
+      "title": "External cron bootstrap",
+      "summary": "Activate the PM bootstrap before an external cron scheduler starts, so its dependencies load before ownership acknowledgement.",
+      "default_enabled": true,
+      "maintenance": "retirement-review",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#122719](https://github.com/NousResearch/hermes-agent/pull/122719)",
+          "state": "closed",
+          "merged_at": null,
+          "author": "aglowinthefield"
+        },
+        {
+          "reference": "[NousResearch/hermes-agent#126344](https://github.com/NousResearch/hermes-agent/pull/126344)",
+          "state": "merged",
+          "merged_at": "2026-09-28T22:02:37Z",
+          "author": "kshitijk4poor"
+        }
+      ],
+      "note": "The original proposal closed unmerged and a different successor merged. Verify the target worker path before retiring this workaround."
+    },
+    {
+      "id": "kanban-worktree-teardown",
+      "title": "Independent worktree cleanup",
+      "summary": "Clean completed, clean, fully pushed worktrees without waiting on children using independent workspaces; retain shared/scratch workspaces while needed.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#123017](https://github.com/NousResearch/hermes-agent/pull/123017)",
+          "state": "open",
+          "merged_at": null,
+          "author": "aglowinthefield"
+        }
+      ],
+      "note": "Rebased backport; retain until upstream behavior and regression tests are verified."
+    },
+    {
+      "id": "dashboard-dispatch-caps",
+      "title": "Dashboard dispatch limits",
+      "summary": "Respect configured total/per-profile in-progress caps, failure limits and default assignee when nudging dashboard dispatch.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#120651](https://github.com/NousResearch/hermes-agent/pull/120651)",
+          "state": "open",
+          "merged_at": null,
+          "author": "stevewandler"
+        }
+      ],
+      "note": "Partial port. It does not implement the shared resolver or the upstream proposal's configured max_spawn default."
+    },
+    {
+      "id": "project-skills-worktree-trust",
+      "title": "Worktree skill trust",
+      "summary": "Let registered linked worktrees inherit canonical-repository skill trust after Git metadata validation.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#116040](https://github.com/NousResearch/hermes-agent/pull/116040)",
+          "state": "open",
+          "merged_at": null,
+          "author": "MohamadKanso"
+        }
+      ],
+      "note": "Local validation changes differ from the current proposal; review additional upstream trust corrections before retirement."
+    },
+    {
+      "id": "multiplex-notice-profile-scope",
+      "title": "Profile-owned lifecycle notices",
+      "summary": "Use the owning profile's preferences, language, cron store and delivery adapters for shutdown and interrupted-cron notices.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#128952](https://github.com/NousResearch/hermes-agent/pull/128952)",
+          "state": "open",
+          "merged_at": null,
+          "author": "iainlane"
+        }
+      ],
+      "note": "Local port does not include every module extraction or later correction in the current proposal."
+    },
+    {
+      "id": "kanban-merged-review-sync",
+      "title": "Merged review reconciliation",
+      "summary": "Reuse persisted PR evidence and reconcile unclaimed merged reviews after acceptance checks, without holding board locks across GitHub reads.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#117500](https://github.com/NousResearch/hermes-agent/pull/117500)",
+          "state": "open",
+          "merged_at": null,
+          "author": "aglowinthefield"
+        }
+      ],
+      "note": "Recheck handoff identity before completion; never bypass acceptance gates."
+    },
+    {
+      "id": "idle-compact-watchdog-79357",
+      "title": "Idle compaction timestamp",
+      "summary": "Preserve pre-watchdog activity time so the idle-compaction check sees the actual idle gap.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#79456](https://github.com/NousResearch/hermes-agent/pull/79456)",
+          "state": "open",
+          "merged_at": null,
+          "author": "RelaxJonh"
+        }
+      ],
+      "note": "Hand-port adapted to the extracted compaction module."
+    },
+    {
+      "id": "kanban-skill-pin-tolerance",
+      "title": "Stale skill-pin tolerance",
+      "summary": "Drop unavailable assignee skill pins at creation and worker launch, recording creation-time drops and warning at launch.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#89601](https://github.com/NousResearch/hermes-agent/pull/89601)",
+          "state": "open",
+          "merged_at": null,
+          "author": "terrichan-git"
+        }
+      ],
+      "note": "One owner for this behavior: duplicated skill-filter hunks were removed from the token-hygiene artifact."
+    },
+    {
+      "id": "kanban-token-hygiene",
+      "title": "Compact handoffs and local guidance",
+      "summary": "Deliver parent attachments and archived-parent handoffs; reduce duplicated output/history; add compact/minimal views, hard-blocker escalation and local read/card-budget guidance.",
+      "default_enabled": true,
+      "maintenance": "mixed",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#120542](https://github.com/NousResearch/hermes-agent/pull/120542)",
+          "state": "open",
+          "merged_at": null,
+          "author": "aglowinthefield"
+        },
+        {
+          "reference": "[NousResearch/hermes-agent#120543](https://github.com/NousResearch/hermes-agent/pull/120543)",
+          "state": "open",
+          "merged_at": null,
+          "author": "aglowinthefield"
+        },
+        {
+          "reference": "[NousResearch/hermes-agent#116561](https://github.com/NousResearch/hermes-agent/pull/116561)",
+          "state": "open",
+          "merged_at": null,
+          "author": "Anthony-atic"
+        },
+        {
+          "reference": "[NousResearch/hermes-agent#125333](https://github.com/NousResearch/hermes-agent/pull/125333)",
+          "state": "open",
+          "merged_at": null,
+          "author": "Building-God"
+        },
+        {
+          "reference": "[NousResearch/hermes-agent#118790](https://github.com/NousResearch/hermes-agent/pull/118790)",
+          "state": "open",
+          "merged_at": null,
+          "author": "kouyichi"
+        }
+      ],
+      "note": "Atomic toggle for overlapping changes. Local prompt/card-budget policy has no planned upstream submission; the linked fixes await merges. Default/full output is also trimmed."
+    },
+    {
+      "id": "kanban-branch-name-punctuation",
+      "title": "Valid project branch slugs",
+      "summary": "Strip boundary periods/hyphens, including after truncation, while retaining internal version-number periods.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#130500](https://github.com/NousResearch/hermes-agent/pull/130500)",
+          "state": "open",
+          "merged_at": null,
+          "author": "aglowinthefield"
+        }
+      ],
+      "note": "Backport; retain until the upstream behavior is verified."
+    }
+  ]
+}

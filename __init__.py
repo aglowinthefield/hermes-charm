@@ -1,7 +1,8 @@
-"""Charm registers read-only maintenance commands through the native plugin API."""
+"""Charm registers controls through the native plugin API without modifying core."""
 from .charm import run, setup
+from functools import partial
 
 
 def register(ctx):
-    ctx.register_cli_command(name='charm', help='Check Charm and its pinned core patch bundle',
-                             setup_fn=setup, handler_fn=run)
+    ctx.register_cli_command(name='charm', help='Inspect, configure and explicitly apply Charm customizations',
+                             setup_fn=partial(setup, ctx=ctx), handler_fn=run)

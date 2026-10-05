@@ -113,8 +113,20 @@ def load_patches(root, directory):
     return patches, sorted(paths)
 
 
-def preflight(agent, directory, scratch):
+def patch_directions(root, name, data):
+    forward = git(root, 'apply', '--check', input_data=data, required=False).returncode == 0
+    reverse = git(root, 'apply', '--check', '-R', input_data=data, required=False).returncode == 0
+    if forward and reverse:
+        raise UnsafePatch(f'Ambiguous patch state: {name}; both directions match')
+    return forward, reverse
+
+
+def preflight(agent, directory, scratch, disabled=()):
     patches, paths = load_patches(agent, directory)
+    disabled = set(disabled)
+    unknown = disabled - {name for name, _, _ in patches}
+    if unknown:
+        raise UnsafePatch(f'Unknown customization: {", ".join(sorted(unknown))}')
     original = {name: snapshot(agent, name) for name in paths}
     git(scratch, 'init', '-q')
     for name, value in original.items():
@@ -122,25 +134,42 @@ def preflight(agent, directory, scratch):
             put(scratch, name, value)
     pending = []
     states = []
+    removing = []
+    # Remove disabled artifacts in reverse order, only after proving their exact
+    # bytes can reverse. Configuration alone must never leave an active fix "off".
+    for name, data, _ in reversed(patches):
+        if name not in disabled:
+            continue
+        forward, reverse = patch_directions(scratch, name, data)
+        if reverse:
+            git(scratch, 'apply', '-R', input_data=data)
+            removing.append(name)
+        elif not forward:
+            raise UnsafePatch(f'Cannot safely determine disabled patch state: {name}')
     for i, (name, data, digest) in enumerate(patches):
         patch = scratch.parent / f'{i}.patch'
         patch.write_bytes(data)
-        if git(scratch, 'apply', '--check', '-R', str(patch), required=False).returncode == 0:
+        if name in disabled:
+            states.append({'name': name, 'sha256': digest, 'enabled': False,
+                           'state': 'pending-removal' if name in removing else 'disabled'})
+            continue
+        forward, reverse = patch_directions(scratch, name, data)
+        if reverse:
             states.append({'name': name, 'sha256': digest, 'state': 'applied'})
         else:
             git(scratch, 'apply', '--check', str(patch))
             git(scratch, 'apply', str(patch))
             pending.append(name)
             states.append({'name': name, 'sha256': digest, 'state': 'pending'})
-    for i, (name, _, _) in enumerate(patches):
-        patch = scratch.parent / f'{i}.patch'
-        if git(scratch, 'apply', '--check', '-R', str(patch), required=False).returncode:
+    for name, data, _ in patches:
+        forward, reverse = patch_directions(scratch, name, data)
+        if not (forward if name in disabled else reverse):
             raise UnsafePatch(f'Patch set invalidates {name}; bundle overlapping patches')
     final = {name: snapshot(scratch, name) for name in paths}
-    return original, final, states, pending
+    return original, final, states, pending, removing
 
 
-def ensure(agent, directory, state, check=False):
+def ensure(agent, directory, state, check=False, disabled=()):
     state.parent.mkdir(parents=True, exist_ok=True)
     # Lock beside the checkout so callers cannot bypass serialization by choosing
     # a different status file. Updates themselves must not run concurrently.
@@ -150,9 +179,10 @@ def ensure(agent, directory, state, check=False):
         with tempfile.TemporaryDirectory(prefix='patch-preflight-', dir=state.parent) as temp:
             scratch = Path(temp) / 'agent'
             scratch.mkdir()
-            original, final, states, pending = preflight(agent, directory, scratch)
+            original, final, states, pending, removing = preflight(agent, directory, scratch, disabled)
         report = {'head': head, 'agent': str(agent), 'checked_at': int(time.time()), 'patches': states,
-                  'pending': pending, 'mode': 'check' if check else 'apply', 'ok': True}
+                  'pending': pending, 'removing': removing,
+                  'mode': 'check' if check else 'apply', 'ok': True}
         if check:
             return report
         if head != git(agent, 'rev-parse', '--verify', 'HEAD', required=False).stdout.decode().strip():
@@ -233,13 +263,18 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--check', action='store_true', help='Preflight only; never change checkout')
     mode.add_argument('--rollback', type=Path, help='Restore an unchanged installation from its backup')
+    parser.add_argument('--disable', action='append', default=[], metavar='NAME',
+                        help='Exclude a customization and safely remove it if applied')
     args = parser.parse_args()
     home = Path(os.environ.get('HERMES_HOME', str(Path.home() / '.hermes')))
     agent = Path(os.environ.get('LOCAL_PATCHES_AGENT_DIR', str(home / 'hermes-agent'))).resolve()
     directory = Path(os.environ.get('LOCAL_PATCHES_DIR', str(Path(__file__).resolve().parent / 'local-patches'))).resolve()
     state = Path(os.environ.get('LOCAL_PATCHES_STATE', str(home / 'state/local-patches.status')))
     try:
-        report = rollback(agent, args.rollback, state) if args.rollback else ensure(agent, directory, state, check=args.check)
+        if args.rollback and args.disable:
+            raise UnsafePatch('Rollback cannot be combined with customization selection')
+        report = rollback(agent, args.rollback, state) if args.rollback else ensure(
+            agent, directory, state, check=args.check, disabled=args.disable)
         print(json.dumps(report, indent=2))
         return 0
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, UnsafePatch) as exc:

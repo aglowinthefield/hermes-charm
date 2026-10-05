@@ -6,6 +6,9 @@ until upstream supplies the behavior or an extension point. Plugin loading never
 ## Controls
 
 - `ACTIVE` records the ordered set; `pins.json` binds each reviewed artifact to its SHA-256.
+- Native boolean settings select desired artifacts. A toggle never changes source by itself.
+- Check is read-only. Apply reverses disabled artifacts exactly in the sandbox, validates the
+  entire desired set, then writes. Ambiguous state or a conflicting selection fails closed.
 - `local_patches.py` copies touched files into an isolated Git directory and preflights all patches.
 - Every patch must reverse against the final sandbox result. Bundle overlapping context.
 - The installer refuses unsafe paths, symlinks, hardlinked targets, unsupported modes, binaries,
@@ -27,9 +30,10 @@ installation; preserve backups and require a fresh preflight before starting ser
 
 ```sh
 hermes charm check
-sh ~/.hermes/plugins/charm/scripts/local-patches-ensure.sh --check
-sh ~/.hermes/plugins/charm/scripts/local-patches-ensure.sh
-sh ~/.hermes/plugins/charm/scripts/local-patches-ensure.sh --rollback ~/.hermes/state/patch-backup-RECEIPT_ID
+hermes charm disable worker-memory-cap
+hermes charm apply --check
+hermes charm apply
+hermes charm apply --rollback ~/.hermes/state/patch-backup-RECEIPT_ID
 ```
 
 Receipts stay in the active home's `state/local-patches.status`. A refusal leaves the last
@@ -50,7 +54,9 @@ and explicit external companion invocations; they are not settings for automatic
 7. Restart separately when workers are idle. No command here automatically restarts a backend.
 
 A conflict does not prove a fix landed upstream. Never auto-retire patches or hide their application
-inside plugin registration. Remove a deliberately retired entry before startup to avoid reapplication.
+inside plugin registration. Disable a deliberately retired customization before startup to avoid
+reapplication. Rollback restores source, not desired settings. The raw Python engine does not
+read profile settings; the native command, shell wrapper and Charm guard do.
 
 ## Compatibility limits
 

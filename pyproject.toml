@@ -1,6 +1,6 @@
 [project]
 name = "hermes-charm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Maintained Hermes customizations and an explicit pinned core patch bundle"
 requires-python = ">=3.11"
 dependencies = []
