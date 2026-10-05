@@ -54,6 +54,13 @@ class CardBodyGateSkillPins(unittest.TestCase):
         self.assertEqual(self.run_gate(["repo-hermes-skill"], "skills:\n  project_discovery: true\n").returncode, 2)
         self.assertEqual(self.run_gate(["repo-hermes-skill"]).returncode, 2)
 
+    def test_symlinked_skill_resolves_like_the_loader(self):
+        # Hermes's loader walks with followlinks=True; a skill shared by link must resolve too.
+        skill(self.repo, ".claude/skills/linked-skill")
+        os.symlink("../../.claude/skills/linked-skill", self.repo / ".hermes/skills/linked-skill")
+        result = self.run_gate(["linked-skill"], self.trusted())
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_untrusted_project_skill_is_blocked(self):
         self.assertEqual(self.run_gate(["untrusted-skill"], self.trusted()).returncode, 2)
 

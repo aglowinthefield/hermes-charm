@@ -83,7 +83,7 @@ def resolvable(name, dirs):
     for base in dirs:
         if not os.path.isdir(base):
             continue
-        for root, _dirnames, filenames in os.walk(base):
+        for root, _dirnames, filenames in os.walk(base, followlinks=True):
             if "SKILL.md" in filenames and os.path.basename(root) == name:
                 return True
     return False
