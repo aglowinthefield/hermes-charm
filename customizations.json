@@ -2,28 +2,6 @@
   "upstream_checked_at": "2026-10-05T02:52:11Z",
   "customizations": [
     {
-      "id": "cron-worker-bootstrap",
-      "title": "External cron bootstrap",
-      "summary": "Activate the PM bootstrap before an external cron scheduler starts, so its dependencies load before ownership acknowledgement.",
-      "default_enabled": true,
-      "maintenance": "retirement-review",
-      "sources": [
-        {
-          "reference": "[NousResearch/hermes-agent#122719](https://github.com/NousResearch/hermes-agent/pull/122719)",
-          "state": "closed",
-          "merged_at": null,
-          "author": "aglowinthefield"
-        },
-        {
-          "reference": "[NousResearch/hermes-agent#126344](https://github.com/NousResearch/hermes-agent/pull/126344)",
-          "state": "merged",
-          "merged_at": "2026-09-28T22:02:37Z",
-          "author": "kshitijk4poor"
-        }
-      ],
-      "note": "The original proposal closed unmerged and a different successor merged. Verify the target worker path before retiring this workaround."
-    },
-    {
       "id": "kanban-worktree-teardown",
       "title": "Independent worktree cleanup",
       "summary": "Clean completed, clean, fully pushed worktrees without waiting on children using independent workspaces; retain shared/scratch workspaces while needed.",

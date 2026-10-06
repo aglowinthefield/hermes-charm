@@ -42,7 +42,6 @@ A merge is a reason to review retirement, not permission to silently remove a pa
 
 | Toggle | What it changes | Upstream / maintenance |
 | --- | --- | --- |
-| `cron-worker-bootstrap` | Activate the PM bootstrap before an external cron scheduler starts, so its dependencies load before ownership acknowledgement. | [NousResearch/hermes-agent#122719](https://github.com/NousResearch/hermes-agent/pull/122719) (closed without merge); [NousResearch/hermes-agent#126344](https://github.com/NousResearch/hermes-agent/pull/126344) (merged). The original proposal closed unmerged and a different successor merged. Verify the target worker path before retiring this workaround. |
 
 The token-hygiene row is one atomic group of overlapping handoff/prompt changes.
 Its upstream portions and local policy cannot be switched separately yet.
@@ -85,10 +84,10 @@ Use the toggles in Charm's settings form in the Desktop Plugins tab, or the nati
 
 ```sh
 hermes charm list
-hermes charm disable cron-worker-bootstrap
+hermes charm disable kanban-worktree-teardown
 hermes charm check
 hermes charm apply
-hermes charm enable cron-worker-bootstrap
+hermes charm enable kanban-worktree-teardown
 ```
 
 Enable/disable changes only the desired profile setting. Check reports pending additions
@@ -97,7 +96,7 @@ reverses disabled ones in a sandbox first, retaining backups, unrelated edits an
 Changes affect running backends only after a separate, safe restart. No command restarts them.
 
 Settings live at `plugins.entries.charm.settings.<toggle-id>` and are real booleans.
-For example, `hermes config set plugins.entries.charm.settings.cron-worker-bootstrap false`.
+For example, `hermes config set plugins.entries.charm.settings.kanban-worktree-teardown false`.
 An unknown toggle, non-boolean setting, ambiguous patch state or unsafe combination refuses
 the operation. Merely deleting an ACTIVE entry would not remove its already-applied code.
 

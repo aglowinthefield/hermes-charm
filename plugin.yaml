@@ -5,10 +5,6 @@ description: Maintained Hermes customizations with explicit per-profile controls
 provides_tools: []
 capabilities: []
 config_schema:
-  cron-worker-bootstrap:
-    type: bool
-    default: true
-    description: "External cron bootstrap. Activate the PM bootstrap before an external cron scheduler starts, so its dependencies load before ownership acknowledgement. Requires explicit apply and backend restart."
   kanban-worktree-teardown:
     type: bool
     default: true
