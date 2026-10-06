@@ -30,7 +30,7 @@ installation; preserve backups and require a fresh preflight before starting ser
 
 ```sh
 hermes charm check
-hermes charm disable worker-memory-cap
+hermes charm disable cron-worker-bootstrap
 hermes charm apply --check
 hermes charm apply
 hermes charm apply --rollback ~/.hermes/state/patch-backup-RECEIPT_ID

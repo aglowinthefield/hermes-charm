@@ -1,15 +1,22 @@
 diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
-index 4dec66552831..4a2df549fa47 100644
+index 6c975b0a6b99..de9daa69b3f9 100644
 --- a/agent/prompt_builder.py
 +++ b/agent/prompt_builder.py
-@@ -1311,8 +1311,16 @@ def build_skills_system_prompt(
-     try:
-         external_dirs = get_all_skills_dirs()[1:]  # skip local (index 0)
-         # Trusted project-local dirs — highest-precedence tier; cwd/trust are session-stable, so byte-stable.
--        from agent.skill_utils import get_project_skills_dirs
-+        from agent.skill_utils import get_project_skills_dirs, get_untrusted_project_skills_root
-         project_dirs = get_project_skills_dirs()
-+        if not project_dirs:
+@@ -23,7 +23,7 @@ from agent.model_metadata import CHARS_PER_TOKEN
+ from agent.runtime_cwd import resolve_agent_cwd
+ from agent.skill_utils import (
+     EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS,
+-    TIER_LOCAL, extract_skill_conditions, extract_skill_description, get_disabled_skill_names, get_skill_search_roots,
++    TIER_LOCAL, TIER_PROJECT, extract_skill_conditions, extract_skill_description, get_disabled_skill_names, get_skill_search_roots,
+     iter_skill_index_files, parse_frontmatter, skill_matches_apps, skill_matches_environment,
+     skill_matches_platform, skill_matches_platform_list,
+ )
+@@ -1349,6 +1349,15 @@ def build_skills_system_prompt(
+         # Every non-local root as (tier, dir) in the shared precedence order: trusted project dirs (cwd/trust
+         # are session-stable, so byte-stable), skills.create_dir, skills.external_dirs.
+         extra_roots = [(t, d) for t, d in get_skill_search_roots(skills_dir) if t != TIER_LOCAL]
++        if not any(t == TIER_PROJECT for t, _ in extra_roots):
++            from agent.skill_utils import get_untrusted_project_skills_root
 +            untrusted = get_untrusted_project_skills_root()
 +            if untrusted is not None:
 +                root, count = untrusted
@@ -17,14 +24,14 @@ index 4dec66552831..4a2df549fa47 100644
 +                    "%d project skill(s) found in %s but not loaded — run `hermes skills trust` to enable them",
 +                    count, root,
 +                )
-         if not skills_dir.exists() and not external_dirs and not project_dirs:
+         if not skills_dir.exists() and not extra_roots:
              return ""
          return _build_skills_system_prompt_inner(
 diff --git a/agent/skill_utils.py b/agent/skill_utils.py
-index 6b10f82436cf..0425528e864a 100644
+index 8f8b115bc0ea..7fd38d7c8c5b 100644
 --- a/agent/skill_utils.py
 +++ b/agent/skill_utils.py
-@@ -482,10 +482,93 @@ def _project_trusted_dirs_from_config() -> Set[Path]:
+@@ -543,10 +543,93 @@ def _project_trusted_dirs_from_config() -> Set[Path]:
      return result
  
  
@@ -121,7 +128,7 @@ index 6b10f82436cf..0425528e864a 100644
          return False
  
 diff --git a/hermes_cli/main_agent_cmds.py b/hermes_cli/main_agent_cmds.py
-index 17a2e49b65aa..56150560734d 100644
+index 5f27641239e1..be2ec00bc7b6 100644
 --- a/hermes_cli/main_agent_cmds.py
 +++ b/hermes_cli/main_agent_cmds.py
 @@ -193,6 +193,7 @@ def _cmd_skills_trust(args):

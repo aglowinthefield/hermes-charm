@@ -5,10 +5,6 @@ description: Maintained Hermes customizations with explicit per-profile controls
 provides_tools: []
 capabilities: []
 config_schema:
-  worker-memory-cap:
-    type: bool
-    default: true
-    description: "Worker resource policy. Override the default 4 GiB worker ceiling within host/cgroup bounds and select a shared worker slice. Requires explicit apply and backend restart."
   cron-worker-bootstrap:
     type: bool
     default: true

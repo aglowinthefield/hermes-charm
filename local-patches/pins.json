@@ -1,13 +1,12 @@
 {
-  "worker-memory-cap": "c10a341b2eba7edd5b2e0b45a3c93f24ed6bae5dbdd1f03343bbf5b5d93e7770",
   "cron-worker-bootstrap": "a3042834e3a770126bd6996f9aabd01a6a5060787f633fcb0f801e90acd4ddcb",
   "kanban-worktree-teardown": "cfe112936d7556438242997997092ca3233e4910f6cfb8fb9d0d3ed0f71e10dc",
   "dashboard-dispatch-caps": "5ab54dbde351d5ce34a1abf7219ede928121899ff72e718304f0b60b0956ec73",
-  "project-skills-worktree-trust": "d26b03f0d2ac488f49976bf38862a6153943ed95c1bc40f7c80dd1e7e5019723",
+  "project-skills-worktree-trust": "9e6d3851d537066981e0ce8edfa30167996ac4d43442863946d5861f7d75daf6",
   "multiplex-notice-profile-scope": "43798cc239aa378a6cd3d18a80eec15828da1cb1023711acf5308da676325f1e",
   "kanban-merged-review-sync": "239541a7823d4265152cbc83359f82d5f4fcc067deeab3e53175b24cc50e064f",
   "idle-compact-watchdog-79357": "76da573d9543c3ba2e187855887583961df4e3eca9fbd84bb72f3aa4fd562ac8",
-  "kanban-skill-pin-tolerance": "d0dc261f2a94c9587e50eb1550fe89a024aecab607bc617aaf648fda114b822b",
+  "kanban-skill-pin-tolerance": "2d0bff24c41f5e7c9fd5f518c0ca7855105a8a74fcd2a76c86630f224e1c8415",
   "kanban-token-hygiene": "81e67d368f09291dc531e48c101b78cfa480478ba0a4d40675fdca52e3496ad6",
   "kanban-branch-name-punctuation": "5c37b509ba4d8e25ad2659fd5d41dc283dae67332ce43eb75be46bc082a651ca"
 }

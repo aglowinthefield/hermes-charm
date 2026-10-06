@@ -65,7 +65,7 @@ class CharmTests(unittest.TestCase):
     def test_unknown_toggle_and_nonboolean_setting_fail_without_writes(self):
         from contextlib import redirect_stderr
         for settings, words in [({}, ['disable', 'worker-memory-cpa']),
-                                ({'worker-memory-cap': 'false'}, ['list'])]:
+                                ({'cron-worker-bootstrap': 'false'}, ['list'])]:
             with self.subTest(words=words, settings=settings):
                 before = settings.copy()
                 parser = self.registered_parser(settings)
@@ -129,7 +129,7 @@ class CharmTests(unittest.TestCase):
     def test_native_toggle_changes_only_desired_profile_setting(self):
         settings = {'unrelated': 'keep'}
         parser = self.registered_parser(settings)
-        feature = 'worker-memory-cap'
+        feature = 'cron-worker-bootstrap'
         result = self.invoke_registered(parser, 'disable', feature)
         self.assertEqual(settings, {'unrelated': 'keep', feature: False})
         self.assertFalse(result['desired_enabled'])

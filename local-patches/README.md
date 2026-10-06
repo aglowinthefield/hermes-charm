@@ -9,7 +9,6 @@ that these patches apply to every release. Recheck upstream status before retiri
 
 | Artifact | Origin and purpose |
 | --- | --- |
-| `worker-memory-cap` | Local worker resource-limit correction. |
 | `cron-worker-bootstrap` | Local PM-aware cron-worker bootstrap correction. |
 | `kanban-worktree-teardown` | [NousResearch/hermes-agent#123017](https://github.com/NousResearch/hermes-agent/pull/123017), rebased shared-workspace cleanup. |
 | `dashboard-dispatch-caps` | Local port of [NousResearch/hermes-agent#120651](https://github.com/NousResearch/hermes-agent/pull/120651), dispatch limits. |

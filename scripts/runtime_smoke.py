@@ -13,7 +13,7 @@ def main():
     hermes = sys.argv[1] if len(sys.argv) > 1 else 'hermes'
     with tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR')) as temp:
         base = Path(temp)
-        feature = 'worker-memory-cap'
+        feature = 'cron-worker-bootstrap'
         for label in ('a', 'b', 'a-again'):
             home = base / label
             plugin = home / 'plugins/charm'

@@ -2,15 +2,6 @@
   "upstream_checked_at": "2026-10-05T02:52:11Z",
   "customizations": [
     {
-      "id": "worker-memory-cap",
-      "title": "Worker resource policy",
-      "summary": "Override the default 4 GiB worker ceiling within host/cgroup bounds and select a shared worker slice.",
-      "default_enabled": true,
-      "maintenance": "homebrew",
-      "sources": [],
-      "note": "Local operator resource policy; no upstream submission is planned for this customization."
-    },
-    {
       "id": "cron-worker-bootstrap",
       "title": "External cron bootstrap",
       "summary": "Activate the PM bootstrap before an external cron scheduler starts, so its dependencies load before ownership acknowledgement.",

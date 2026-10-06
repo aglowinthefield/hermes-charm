@@ -18,7 +18,6 @@ A merge is a reason to review retirement, not permission to silently remove a pa
 
 | Toggle | What it changes | Upstream / maintenance |
 | --- | --- | --- |
-| `worker-memory-cap` | Override the default 4 GiB worker ceiling within host/cgroup bounds and select a shared worker slice. | Local operator resource policy; no upstream submission is planned for this customization. |
 
 ### Temporary fixes awaiting upstream merges
 
@@ -86,10 +85,10 @@ Use the toggles in Charm's settings form in the Desktop Plugins tab, or the nati
 
 ```sh
 hermes charm list
-hermes charm disable worker-memory-cap
+hermes charm disable cron-worker-bootstrap
 hermes charm check
 hermes charm apply
-hermes charm enable worker-memory-cap
+hermes charm enable cron-worker-bootstrap
 ```
 
 Enable/disable changes only the desired profile setting. Check reports pending additions
@@ -98,7 +97,7 @@ reverses disabled ones in a sandbox first, retaining backups, unrelated edits an
 Changes affect running backends only after a separate, safe restart. No command restarts them.
 
 Settings live at `plugins.entries.charm.settings.<toggle-id>` and are real booleans.
-For example, `hermes config set plugins.entries.charm.settings.worker-memory-cap false`.
+For example, `hermes config set plugins.entries.charm.settings.cron-worker-bootstrap false`.
 An unknown toggle, non-boolean setting, ambiguous patch state or unsafe combination refuses
 the operation. Merely deleting an ACTIVE entry would not remove its already-applied code.
 

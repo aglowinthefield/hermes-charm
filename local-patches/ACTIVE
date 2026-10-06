@@ -2,7 +2,6 @@
 # scripts/local-patches-ensure.sh reapplies them on every gateway/serve start (systemd
 # ExecStartPre), which covers the restart after `hermes update` stashes them.
 # Remove a line once its fix lands upstream. See README.md for each patch.
-worker-memory-cap
 cron-worker-bootstrap
 kanban-worktree-teardown
 dashboard-dispatch-caps
