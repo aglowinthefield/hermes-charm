@@ -68,7 +68,7 @@
     {
       "id": "kanban-merged-review-sync",
       "title": "Merged review reconciliation",
-      "summary": "Reuse persisted PR evidence and reconcile unclaimed merged reviews after acceptance checks, without holding board locks across GitHub reads.",
+      "summary": "Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads.",
       "default_enabled": true,
       "maintenance": "upstream",
       "sources": [
@@ -80,6 +80,15 @@
         }
       ],
       "note": "Recheck handoff identity before completion; never bypass acceptance gates."
+    },
+    {
+      "id": "kanban-review-complete-action",
+      "title": "Review completion action",
+      "summary": "Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it.",
+      "default_enabled": true,
+      "maintenance": "homebrew",
+      "sources": [],
+      "note": "Local dashboard affordance; the backend already permits review-to-done completion."
     },
     {
       "id": "idle-compact-watchdog-79357",

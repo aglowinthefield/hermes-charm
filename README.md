@@ -18,6 +18,7 @@ A merge is a reason to review retirement, not permission to silently remove a pa
 
 | Toggle | What it changes | Upstream / maintenance |
 | --- | --- | --- |
+| `kanban-review-complete-action` | Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it. | Local dashboard affordance; the backend already permits review-to-done completion. |
 
 ### Temporary fixes awaiting upstream merges
 
@@ -27,7 +28,7 @@ A merge is a reason to review retirement, not permission to silently remove a pa
 | `dashboard-dispatch-caps` | Respect configured total/per-profile in-progress caps, failure limits and default assignee when nudging dashboard dispatch. | [NousResearch/hermes-agent#120651](https://github.com/NousResearch/hermes-agent/pull/120651) (open). Partial port. It does not implement the shared resolver or the upstream proposal's configured max_spawn default. |
 | `project-skills-worktree-trust` | Let registered linked worktrees inherit canonical-repository skill trust after Git metadata validation. | [NousResearch/hermes-agent#116040](https://github.com/NousResearch/hermes-agent/pull/116040) (open). Local validation changes differ from the current proposal; review additional upstream trust corrections before retirement. |
 | `multiplex-notice-profile-scope` | Use the owning profile's preferences, language, cron store and delivery adapters for shutdown and interrupted-cron notices. | [NousResearch/hermes-agent#128952](https://github.com/NousResearch/hermes-agent/pull/128952) (open). Local port does not include every module extraction or later correction in the current proposal. |
-| `kanban-merged-review-sync` | Reuse persisted PR evidence and reconcile unclaimed merged reviews after acceptance checks, without holding board locks across GitHub reads. | [NousResearch/hermes-agent#117500](https://github.com/NousResearch/hermes-agent/pull/117500) (open). Recheck handoff identity before completion; never bypass acceptance gates. |
+| `kanban-merged-review-sync` | Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads. | [NousResearch/hermes-agent#117500](https://github.com/NousResearch/hermes-agent/pull/117500) (open). Recheck handoff identity before completion; never bypass acceptance gates. |
 | `idle-compact-watchdog-79357` | Preserve pre-watchdog activity time so the idle-compaction check sees the actual idle gap. | [NousResearch/hermes-agent#79456](https://github.com/NousResearch/hermes-agent/pull/79456) (open). Hand-port adapted to the extracted compaction module. |
 | `kanban-skill-pin-tolerance` | Drop unavailable assignee skill pins at creation and worker launch, recording creation-time drops and warning at launch. | [NousResearch/hermes-agent#89601](https://github.com/NousResearch/hermes-agent/pull/89601) (open). One owner for this behavior: duplicated skill-filter hunks were removed from the token-hygiene artifact. |
 | `kanban-branch-name-punctuation` | Strip boundary periods/hyphens, including after truncation, while retaining internal version-number periods. | [NousResearch/hermes-agent#130500](https://github.com/NousResearch/hermes-agent/pull/130500) (open). Backport; retain until the upstream behavior is verified. |

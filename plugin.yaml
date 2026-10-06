@@ -24,7 +24,11 @@ config_schema:
   kanban-merged-review-sync:
     type: bool
     default: true
-    description: "Merged review reconciliation. Reuse persisted PR evidence and reconcile unclaimed merged reviews after acceptance checks, without holding board locks across GitHub reads. Requires explicit apply and backend restart."
+    description: "Merged review reconciliation. Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads. Requires explicit apply and backend restart."
+  kanban-review-complete-action:
+    type: bool
+    default: true
+    description: "Review completion action. Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it. Requires explicit apply and backend restart."
   idle-compact-watchdog-79357:
     type: bool
     default: true
