@@ -191,6 +191,7 @@ No automatic backend restarts, network telemetry or unreviewed plugin updates oc
 | Parked-review and give-up notifications | `agent-hooks/kanban-review-parked.sh`, `scripts/kanban-giveup-watch.py` | Home board, destination, identities, and schedule |
 | CI watcher and Linear intake | `scripts/ci-watchdog.py`, `scripts/linear-intake.py` | Required deployment JSON; existing state controls live/shadow behavior |
 | Worktree maintenance | `scripts/kanban-worktree-sweep.py` | Home schedule and active runtime paths |
+| Conflicting-PR rework routing | `scripts/pr-conflict-sweep.py` | Required deployment JSON; reopens only cards parked on the human review assignee |
 
 The eleven native `charm enable/disable` settings above control core patch selection.
 Shell policies and scheduled integrations are separately selected by home hook and
@@ -199,7 +200,8 @@ registration. Blocking policies keep their fail-closed shell adapter rather than
 becoming native callbacks whose exceptions are logged and skipped.
 
 Integration scripts require `HERMES_DEPLOYMENT_CONFIG` to name the home-owned JSON
-file. Sections are `linear-intake`, `ci-watchdog`, and `review-notifications`.
+file. Sections are `linear-intake`, `ci-watchdog`, `review-notifications`, and
+`pr-conflict-sweep`.
 `scripts/deployment_settings.py` validates required settings and types. Missing
 configuration fails visibly. Credential values remain in the secret manager or
 runtime environment; JSON contains references only.

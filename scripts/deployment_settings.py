@@ -22,7 +22,7 @@ _INTEGER_KEYS = {"daily_card_cap", "net_fails_before_alert", "log_excerpt_cap",
                  "send_timeout", "max_sends"}
 _LIST_KEYS = {"watched_workflows", "deploy_workflows"}
 _MAP_KEYS = {"team_to_board", "contract_by_board"}
-_SECTIONS = {"linear-intake", "ci-watchdog", "review-notifications"}
+_SECTIONS = {"linear-intake", "ci-watchdog", "review-notifications", "pr-conflict-sweep"}
 
 
 def get(section: str, key: str) -> Any:
