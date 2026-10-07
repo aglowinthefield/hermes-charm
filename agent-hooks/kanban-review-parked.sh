@@ -36,7 +36,7 @@ case "$CURSOR" in ''|*[!0-9]*) CURSOR=0 ;; esac
 # The latest review_requested event per task currently parked on the human assignee,
 # newer than our cursor. payload.reviewer is the handoff target; when the AI reviewer parks a
 # card it hands to the parking assignee, which is the "waiting on operator" signal.
-ROWS=$(sqlite3 -json "$DB" "
+ROWS=$(sqlite3 -json -cmd '.timeout 2000' "$DB" "
   SELECT e.id AS event_id, t.id AS task_id, t.title,
          json_extract(e.payload, '$.implementer') AS implementer,
          json_extract(e.payload, '$.summary') AS summary
@@ -67,7 +67,7 @@ echo "$ROWS" | jq -c '.[]' | while IFS= read -r row; do
   impl=$(echo "$row" | jq -r '.implementer // "?"')
   summary=$(echo "$row" | jq -r '(.summary // "") | .[0:400]')
   # PR URL lives in the approving run's metadata.published_pr; card text uses #N only.
-  pr=$(sqlite3 "$DB" "SELECT json_extract(metadata,'$.published_pr') FROM task_runs
+  pr=$(sqlite3 -cmd '.timeout 2000' "$DB" "SELECT json_extract(metadata,'$.published_pr') FROM task_runs
         WHERE task_id='$tid' AND metadata IS NOT NULL AND json_extract(metadata,'$.published_pr') IS NOT NULL
         ORDER BY id DESC LIMIT 1;")
   msg="$title
