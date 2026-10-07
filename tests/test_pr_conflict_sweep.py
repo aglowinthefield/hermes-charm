@@ -50,6 +50,9 @@ class FakeCommands:
     def actions(self):
         return [(argv[4], argv[5]) for argv in self.writes]  # (subcommand, task id)
 
+    def acted(self):
+        return [a for a in self.actions() if a[0] != "reassign"]
+
 
 class SweepTests(unittest.TestCase):
     def setUp(self):
@@ -62,14 +65,21 @@ class SweepTests(unittest.TestCase):
             conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, assignee TEXT, status TEXT,"
                          " branch_name TEXT, claim_lock TEXT, created_at INTEGER)")
             conn.execute("CREATE TABLE task_runs (id INTEGER PRIMARY KEY, task_id TEXT, metadata TEXT)")
+            conn.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, kind TEXT,"
+                         " payload TEXT, created_at INTEGER)")
             conn.commit()
         self.settings = {"repo": REPO, "board": "example", "park_assignee": "operator",
                          "collector": "/abs/collect.py"}
 
-    def card(self, task_id, status, assignee="operator", branch=None, claim=None, published=None):
+    def card(self, task_id, status, assignee="operator", branch=None, claim=None, published=None,
+             handoffs=(("builder", "auditor"), ("auditor", "operator"))):
         with closing(sqlite3.connect(self.db)) as conn:
             conn.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, 1)",
                          (task_id, "title", assignee, status, branch, claim))
+            for at, (implementer, reviewer) in enumerate(handoffs):
+                conn.execute("INSERT INTO task_events (task_id, kind, payload, created_at) VALUES (?, ?, ?, ?)",
+                             (task_id, "review_requested",
+                              json.dumps({"implementer": implementer, "reviewer": reviewer}), at))
             if published:
                 conn.execute("INSERT INTO task_runs (task_id, metadata) VALUES (?, ?)",
                              (task_id, json.dumps({"published_pr": published})))
@@ -82,7 +92,9 @@ class SweepTests(unittest.TestCase):
         self.card("t_one", "review", branch="wt/t_one")
         fake = FakeCommands([pr(7, "wt/t_one")])
         report = self.tick(fake)
-        self.assertEqual([("comment", "t_one"), ("reopen-review", "t_one")], fake.actions())
+        self.assertEqual([("comment", "t_one"), ("reopen-review", "t_one"), ("reassign", "t_one")],
+                         fake.actions())
+        self.assertEqual(["builder", "--reclaim"], fake.writes[2][6:8])  # the implementer, not the reviewer
         comment = fake.writes[0][-1]
         self.assertIn("#7", comment)
         self.assertNotIn("https://github.com", comment)  # a PR URL in a comment holds respawns
@@ -96,14 +108,14 @@ class SweepTests(unittest.TestCase):
 
         moved = FakeCommands([pr(7, "wt/t_one", sha="b" * 40)])
         self.tick(moved)
-        self.assertEqual([("comment", "t_one"), ("reopen-review", "t_one")], moved.actions())
+        self.assertEqual([("comment", "t_one"), ("reopen-review", "t_one")], moved.acted())
 
     def test_card_found_through_published_pr_receipt(self):
         self.card("t_two", "review", branch="other-branch",
                   published=f"https://github.com/{REPO}/pull/8")
         fake = FakeCommands([pr(8, "feature-branch")])
         self.tick(fake)
-        self.assertEqual(("reopen-review", "t_two"), fake.actions()[-1])
+        self.assertEqual(("reopen-review", "t_two"), fake.acted()[-1])
 
     def test_mergeable_drafts_and_unknown_are_ignored(self):
         self.card("t_a", "review", branch="a")
@@ -148,7 +160,7 @@ class SweepTests(unittest.TestCase):
         self.assertIn("relevance check failed", report)
         retry = FakeCommands([pr(6, "x")])
         self.tick(retry)
-        self.assertEqual(("reopen-review", "t_x"), retry.actions()[-1])
+        self.assertEqual(("reopen-review", "t_x"), retry.acted()[-1])
 
     def test_resolved_conflict_clears_state_so_a_later_conflict_acts_again(self):
         self.card("t_one", "review", branch="wt/t_one")
@@ -157,7 +169,7 @@ class SweepTests(unittest.TestCase):
         self.assertEqual({}, json.loads(self.state.read_text()))
         again = FakeCommands([pr(7, "wt/t_one")])
         self.tick(again)
-        self.assertEqual(("reopen-review", "t_one"), again.actions()[-1])
+        self.assertEqual(("reopen-review", "t_one"), again.acted()[-1])
 
     def test_failed_reopen_is_reported_and_retried(self):
         self.card("t_one", "review", branch="wt/t_one")
@@ -173,7 +185,14 @@ class SweepTests(unittest.TestCase):
         self.assertIn("not in review?", report)
         retry = FakeCommands([pr(7, "wt/t_one")])
         self.tick(retry)
-        self.assertEqual(("reopen-review", "t_one"), retry.actions()[-1])
+        self.assertEqual(("reopen-review", "t_one"), retry.acted()[-1])
+
+    def test_card_with_no_implementer_handoff_is_reported_not_reopened(self):
+        self.card("t_odd", "review", branch="odd", handoffs=(("auditor", "operator"),))
+        fake = FakeCommands([pr(9, "odd")])
+        report = self.tick(fake)
+        self.assertEqual([], fake.writes)
+        self.assertIn("no implementer", report)
 
     def test_gh_failure_is_reported(self):
         def broken(argv):

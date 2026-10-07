@@ -13,8 +13,10 @@ authenticated `gh` user authored in the configured repo:
      `metadata.published_pr` is this PR's URL. Open cards win over finished ones.
   3. Card in `review`, parked on the human assignee, with no live claim: run the
      silk-pr-relevance collector first. RELEVANT or NEEDS_REWORK gets a card comment with
-     the conflicting files and the rebase playbook, then `reopen-review`, which returns the
-     card to its original implementer. Other verdicts are reported, never reopened.
+     the conflicting files and the rebase playbook, then `reopen-review` and a reassign to the
+     implementer from its last handoff into AI review (`reopen-review` alone restores whoever
+     made the latest handoff, which is the AI reviewer once it has parked the card on the
+     human). Other verdicts are reported, never reopened.
   4. Card already moving (ready, running, todo, or under AI review): leave it alone.
      The implementer rebases before requesting review anyway.
   5. Card human-held (triage, blocked, scheduled), finished, or missing: report it. The
@@ -79,6 +81,25 @@ def owning_card(db: Path, pr: dict) -> sqlite3.Row | None:
     return cards[0]
 
 
+def implementer_of(db: Path, task_id: str, park_assignee: str) -> str | None:
+    """Who built the card: the implementer on its latest handoff into AI review.
+
+    `reopen-review` restores the implementer from the latest `review_requested` event, and when
+    the AI reviewer has already parked the card on the human, that event names the reviewer.
+    Skip handoffs to the human so the rebase goes back to the profile that owns the branch."""
+    with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)) as conn:
+        rows = conn.execute("SELECT payload FROM task_events WHERE task_id = ? AND kind = 'review_requested'"
+                            " ORDER BY created_at DESC, id DESC", (task_id,)).fetchall()
+    for (payload,) in rows:
+        try:
+            event = json.loads(payload)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(event, dict) and event.get("reviewer") != park_assignee and event.get("implementer"):
+            return event["implementer"]
+    return None
+
+
 def relevance(cmd: Runner, collector: str, number: int) -> tuple[str, list[str]]:
     rc, out, err = cmd([sys.executable, collector, str(number)])
     if rc != 0:
@@ -120,6 +141,9 @@ def handle(pr: dict, settings: dict, db: Path, cmd: Runner) -> tuple[bool, str]:
         return True, f"- {label}: conflicting; owner card {task} ({status}, {card['assignee']}) is human-held."
     if status != "review":
         return True, f"- {label}: conflicting; owner card {task} is {status}. Route the rework by hand."
+    implementer = implementer_of(db, task, settings["park_assignee"])
+    if not implementer:
+        return True, f"- {label}: conflicting; owner card {task} has no implementer handoff on record. Route it by hand."
     try:
         verdict, conflicts = relevance(cmd, settings["collector"], number)
     except (RuntimeError, ValueError) as exc:
@@ -133,7 +157,14 @@ def handle(pr: dict, settings: dict, db: Path, cmd: Runner) -> tuple[bool, str]:
         rc, _, err = cmd(argv)
         if rc != 0:
             return False, f"- {label}: could not {argv[4]} {task}, retrying next tick: {err.strip()[-200:]}"
-    return True, f"- {label}: reopened {task} for its implementer to rebase ({verdict})."
+    # reopen-review may restore the reviewer; reclaim covers a dispatcher tick that already
+    # spawned it between the two calls.
+    rc, _, err = cmd(board + ["reassign", task, implementer, "--reclaim", "--reason",
+                              "pr-conflict-sweep: rebase belongs to the card's implementer"])
+    if rc != 0:
+        return True, (f"- {label}: reopened {task}, but reassigning it to {implementer} failed: "
+                      f"{err.strip()[-200:]}. Reassign it by hand.")
+    return True, f"- {label}: reopened {task} for {implementer} to rebase ({verdict})."
 
 
 def run(settings: dict, db: Path, state_path: Path, cmd: Runner) -> str:
