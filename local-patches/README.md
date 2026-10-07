@@ -18,6 +18,7 @@ that these patches apply to every release. Recheck upstream status before retiri
 | `kanban-skill-pin-tolerance` | Hand-port of [NousResearch/hermes-agent#89601](https://github.com/NousResearch/hermes-agent/pull/89601), stale skill pins. |
 | `kanban-token-hygiene` | Stacked bundle absorbing attachment delivery, compact handoffs, block-loop escalation and local guidance. |
 | `kanban-branch-name-punctuation` | [NousResearch/hermes-agent#130500](https://github.com/NousResearch/hermes-agent/pull/130500), trailing title punctuation. |
+| `kanban-rate-limit-backoff` | [NousResearch/hermes-agent#119994](https://github.com/NousResearch/hermes-agent/pull/119994), escalating rate-limit respawn backoff. |
 
 The token-hygiene bundle combines work from
 [NousResearch/hermes-agent#120542](https://github.com/NousResearch/hermes-agent/pull/120542),

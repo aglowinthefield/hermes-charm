@@ -45,3 +45,7 @@ config_schema:
     type: bool
     default: true
     description: "Valid project branch slugs. Strip boundary periods/hyphens, including after truncation, while retaining internal version-number periods. Requires explicit apply and backend restart."
+  kanban-rate-limit-backoff:
+    type: bool
+    default: true
+    description: "Escalating rate-limit respawn backoff. Hold a card 5m, 15m, 45m, then 2h after consecutive rate-limited runs instead of respawning every 5 minutes forever; relay-pool health gate and board-wide circuit stay inert for non-pool providers. Requires explicit apply and backend restart."

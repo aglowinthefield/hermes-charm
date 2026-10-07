@@ -177,6 +177,22 @@
         }
       ],
       "note": "Backport; retain until the upstream behavior is verified."
+    },
+    {
+      "id": "kanban-rate-limit-backoff",
+      "title": "Escalating rate-limit respawn backoff",
+      "summary": "Hold a card 5m, 15m, 45m, then 2h after consecutive rate-limited runs instead of respawning every 5 minutes forever; relay-pool health gate and board-wide circuit stay inert for non-pool providers.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#119994](https://github.com/NousResearch/hermes-agent/pull/119994)",
+          "state": "open",
+          "merged_at": null,
+          "author": "Kyzcreig"
+        }
+      ],
+      "note": "Whole-PR adoption. 2026-10-02 storm: 1,329 rate-limited respawns across 18 cards in 13 hours."
     }
   ]
 }

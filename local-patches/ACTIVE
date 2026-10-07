@@ -13,3 +13,4 @@ kanban-skill-pin-tolerance
 kanban-token-hygiene
 
 kanban-branch-name-punctuation
+kanban-rate-limit-backoff

@@ -32,6 +32,7 @@ A merge is a reason to review retirement, not permission to silently remove a pa
 | `idle-compact-watchdog-79357` | Preserve pre-watchdog activity time so the idle-compaction check sees the actual idle gap. | [NousResearch/hermes-agent#79456](https://github.com/NousResearch/hermes-agent/pull/79456) (open). Hand-port adapted to the extracted compaction module. |
 | `kanban-skill-pin-tolerance` | Drop unavailable assignee skill pins at creation and worker launch, recording creation-time drops and warning at launch. | [NousResearch/hermes-agent#89601](https://github.com/NousResearch/hermes-agent/pull/89601) (open). One owner for this behavior: duplicated skill-filter hunks were removed from the token-hygiene artifact. |
 | `kanban-branch-name-punctuation` | Strip boundary periods/hyphens, including after truncation, while retaining internal version-number periods. | [NousResearch/hermes-agent#130500](https://github.com/NousResearch/hermes-agent/pull/130500) (open). Backport; retain until the upstream behavior is verified. |
+| `kanban-rate-limit-backoff` | Hold a card 5m, 15m, 45m, then 2h after consecutive rate-limited runs instead of respawning every 5 minutes forever; relay-pool health gate and board-wide circuit stay inert for non-pool providers. | [NousResearch/hermes-agent#119994](https://github.com/NousResearch/hermes-agent/pull/119994) (open). Whole-PR adoption. 2026-10-02 storm: 1,329 rate-limited respawns across 18 cards in 13 hours. |
 
 ### Mixed upstream fixes and homebrew policy
 
