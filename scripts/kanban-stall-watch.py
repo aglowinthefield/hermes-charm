@@ -4,7 +4,7 @@
 A board stalls when every `todo` card waits, directly or through other todo cards, on a card
 that only a human can move: one in `review` (the operator's inbox), `triage`, `blocked` or
 `scheduled`. The dispatcher sees zero `ready` cards and runs nothing, and the board looks quiet
-rather than stuck. On 2026-10-07 the silk board held 76 todo cards behind such cards, 57 of them
+rather than stuck. On 2026-10-07 one board held 76 todo cards behind such cards, 57 of them
 behind human-held ones, while running nothing.
 
 Each tick, per board under ~/.hermes/kanban/boards: when nothing is ready or running and todo

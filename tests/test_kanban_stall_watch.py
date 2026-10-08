@@ -40,7 +40,7 @@ class StallWatchTests(unittest.TestCase):
 
     def stalled_board(self):
         # t_rev waits on the operator and holds a three-card chain; t_a/t_b wait on each other.
-        self.board("silk", [
+        self.board("acme", [
             ("t_rev", "SIL-1: ADR", "tom", "review"),
             ("t_c1", "SIL-2: port", "scribe", "todo"),
             ("t_c2", "SIL-3: port", "scribe", "todo"),
@@ -56,12 +56,12 @@ class StallWatchTests(unittest.TestCase):
         ])
 
     def test_moving_board_is_silent(self):
-        self.board("silk", [("t_r", "x", "scribe", "ready"), ("t_t", "y", "scribe", "todo")], [("t_r", "t_t")])
+        self.board("acme", [("t_r", "x", "scribe", "ready"), ("t_t", "y", "scribe", "todo")], [("t_r", "t_t")])
         self.assertEqual("", self.tick(0))
         self.assertEqual("", self.tick(HOUR))
 
     def test_idle_board_is_not_a_stall(self):
-        self.board("silk", [("t_d", "x", "scribe", "done"), ("t_rev", "y", "tom", "review")])
+        self.board("acme", [("t_d", "x", "scribe", "done"), ("t_rev", "y", "tom", "review")])
         self.assertEqual("", self.tick(0))
         self.assertEqual("", self.tick(HOUR))
 
@@ -69,7 +69,7 @@ class StallWatchTests(unittest.TestCase):
         self.stalled_board()
         self.assertEqual("", self.tick(0), "a single observation can be a dispatch-tick gap")
         report = self.tick(15 * 60)
-        self.assertIn("silk", report)
+        self.assertIn("acme", report)
         self.assertIn("0 ready/running, 6 todo", report)
         self.assertIn("t_rev", report)
         self.assertIn("holds 3", report)
@@ -89,7 +89,7 @@ class StallWatchTests(unittest.TestCase):
         self.stalled_board()
         self.tick(0)
         self.tick(15 * 60)
-        with closing(sqlite3.connect(self.boards / "silk" / "kanban.db")) as conn:
+        with closing(sqlite3.connect(self.boards / "acme" / "kanban.db")) as conn:
             conn.execute("UPDATE tasks SET status = 'done' WHERE id = 't_rev'")
             conn.execute("UPDATE tasks SET status = 'ready' WHERE id = 't_c1'")
             conn.commit()
@@ -99,7 +99,7 @@ class StallWatchTests(unittest.TestCase):
     def test_unalerted_stall_that_clears_is_silent(self):
         self.stalled_board()
         self.tick(0)
-        with closing(sqlite3.connect(self.boards / "silk" / "kanban.db")) as conn:
+        with closing(sqlite3.connect(self.boards / "acme" / "kanban.db")) as conn:
             conn.execute("UPDATE tasks SET status = 'running' WHERE id = 't_c1'")
             conn.commit()
         self.assertEqual("", self.tick(15 * 60))

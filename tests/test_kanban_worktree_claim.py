@@ -38,7 +38,7 @@ class WorktreeClaimHookTests(unittest.TestCase):
         self.stranger.wait()
         self.temp.cleanup()
 
-    def board(self, tasks, name="silk"):
+    def board(self, tasks, name="acme"):
         path = self.boards / name
         path.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(path / "kanban.db")) as conn:
@@ -69,7 +69,7 @@ class WorktreeClaimHookTests(unittest.TestCase):
         decision = json.loads(result.stdout)
         self.assertEqual("block", decision["decision"])
         self.assertIn("t_abc123", decision["reason"])
-        self.assertIn("hermes kanban --board silk reassign t_abc123 default --reclaim", decision["reason"])
+        self.assertIn("hermes kanban --board acme reassign t_abc123 default --reclaim", decision["reason"])
         self.assertIn("t_abc123", result.stderr)
 
     def assertAllowed(self, result):

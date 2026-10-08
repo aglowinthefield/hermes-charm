@@ -12,7 +12,7 @@ authenticated `gh` user authored in the configured repo:
   2. Find the owning card on the board: same branch name, or a run whose
      `metadata.published_pr` is this PR's URL. Open cards win over finished ones.
   3. Card in `review`, parked on the human assignee, with no live claim: run the
-     silk-pr-relevance collector first. RELEVANT or NEEDS_REWORK gets a card comment with
+     configured relevance collector first. RELEVANT or NEEDS_REWORK gets a card comment with
      the conflicting files and the rebase playbook, then `reopen-review` and a reassign to the
      implementer from its last handoff into AI review (`reopen-review` alone restores whoever
      made the latest handoff, which is the AI reviewer once it has parked the card on the
@@ -149,7 +149,7 @@ def handle(pr: dict, settings: dict, db: Path, cmd: Runner) -> tuple[bool, str]:
     except (RuntimeError, ValueError) as exc:
         return False, f"- {label}: relevance check failed, retrying next tick: {exc}"
     if verdict not in ACTIONABLE_VERDICTS:
-        return True, (f"- {label}: conflicting, but silk-pr-relevance says {verdict}. Not reopened; "
+        return True, (f"- {label}: conflicting, but the relevance collector says {verdict}. Not reopened; "
                       f"close it or reopen {task} by hand.")
     board = ["hermes", "kanban", "--board", settings["board"]]
     for argv in (board + ["comment", task, "--author", AUTHOR, rework_comment(pr, conflicts)],
