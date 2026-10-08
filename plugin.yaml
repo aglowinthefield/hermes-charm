@@ -49,3 +49,7 @@ config_schema:
     type: bool
     default: true
     description: "Escalating rate-limit respawn backoff. Hold a card 5m, 15m, 45m, then 2h after consecutive rate-limited runs instead of respawning every 5 minutes forever; relay-pool health gate and board-wide circuit stay inert for non-pool providers. Requires explicit apply and backend restart."
+  kanban-superseded-check-runs:
+    type: bool
+    default: true
+    description: "Superseded check runs never veto PR acceptance. Judge each required check by its newest run per app. A cancelled run from a superseded workflow suite on the same head no longer rejects completion of a green or merged PR. Requires explicit apply and backend restart."

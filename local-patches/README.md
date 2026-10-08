@@ -19,6 +19,7 @@ that these patches apply to every release. Recheck upstream status before retiri
 | `kanban-token-hygiene` | Stacked bundle absorbing attachment delivery, compact handoffs, block-loop escalation and local guidance. |
 | `kanban-branch-name-punctuation` | [NousResearch/hermes-agent#130500](https://github.com/NousResearch/hermes-agent/pull/130500), trailing title punctuation. |
 | `kanban-rate-limit-backoff` | [NousResearch/hermes-agent#119994](https://github.com/NousResearch/hermes-agent/pull/119994), escalating rate-limit respawn backoff. |
+| `kanban-superseded-check-runs` | [NousResearch/hermes-agent#122701](https://github.com/NousResearch/hermes-agent/pull/122701) (closed unmerged), newest run per app decides each required check. Overlaps the `collect_acceptance` hunk in `kanban-merged-review-sync`; drop that hunk when re-adapting it. |
 
 The token-hygiene bundle combines work from
 [NousResearch/hermes-agent#120542](https://github.com/NousResearch/hermes-agent/pull/120542),

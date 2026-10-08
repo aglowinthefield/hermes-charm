@@ -193,6 +193,22 @@
         }
       ],
       "note": "Whole-PR adoption. 2026-10-02 storm: 1,329 rate-limited respawns across 18 cards in 13 hours."
+    },
+    {
+      "id": "kanban-superseded-check-runs",
+      "title": "Superseded check runs never veto PR acceptance",
+      "summary": "Judge each required check by its newest run per app. A cancelled run from a superseded workflow suite on the same head no longer rejects completion of a green or merged PR.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#122701](https://github.com/NousResearch/hermes-agent/pull/122701)",
+          "state": "closed",
+          "merged_at": null,
+          "author": "Wenfengcheng"
+        }
+      ],
+      "note": "Whole-PR adoption; fixes issue NousResearch/hermes-agent#122688. The author closed the PR unmerged after a bot review confirmed the fix. Overlaps the parked kanban-merged-review-sync hunk in collect_acceptance; drop that hunk when re-adapting it."
     }
   ]
 }
