@@ -2,22 +2,6 @@
   "upstream_checked_at": "2026-10-05T02:52:11Z",
   "customizations": [
     {
-      "id": "kanban-worktree-teardown",
-      "title": "Independent worktree cleanup",
-      "summary": "Clean completed, clean, fully pushed worktrees without waiting on children using independent workspaces; retain shared/scratch workspaces while needed.",
-      "default_enabled": true,
-      "maintenance": "upstream",
-      "sources": [
-        {
-          "reference": "[NousResearch/hermes-agent#123017](https://github.com/NousResearch/hermes-agent/pull/123017)",
-          "state": "open",
-          "merged_at": null,
-          "author": "aglowinthefield"
-        }
-      ],
-      "note": "Rebased backport; retain until upstream behavior and regression tests are verified."
-    },
-    {
       "id": "dashboard-dispatch-caps",
       "title": "Dashboard dispatch limits",
       "summary": "Respect configured total/per-profile in-progress caps, failure limits and default assignee when nudging dashboard dispatch.",
@@ -64,31 +48,6 @@
         }
       ],
       "note": "Local port does not include every module extraction or later correction in the current proposal."
-    },
-    {
-      "id": "kanban-merged-review-sync",
-      "title": "Merged review reconciliation",
-      "summary": "Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads.",
-      "default_enabled": true,
-      "maintenance": "upstream",
-      "sources": [
-        {
-          "reference": "[NousResearch/hermes-agent#117500](https://github.com/NousResearch/hermes-agent/pull/117500)",
-          "state": "open",
-          "merged_at": null,
-          "author": "aglowinthefield"
-        }
-      ],
-      "note": "Recheck handoff identity before completion; never bypass acceptance gates."
-    },
-    {
-      "id": "kanban-review-complete-action",
-      "title": "Review completion action",
-      "summary": "Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it.",
-      "default_enabled": true,
-      "maintenance": "homebrew",
-      "sources": [],
-      "note": "Local dashboard affordance; the backend already permits review-to-done completion."
     },
     {
       "id": "idle-compact-watchdog-79357",
@@ -208,7 +167,48 @@
           "author": "Wenfengcheng"
         }
       ],
-      "note": "Whole-PR adoption; fixes issue NousResearch/hermes-agent#122688. The author closed the PR unmerged after a bot review confirmed the fix. Overlaps the parked kanban-merged-review-sync hunk in collect_acceptance; drop that hunk when re-adapting it."
+      "note": "Whole-PR adoption; fixes issue NousResearch/hermes-agent#122688. The author closed the PR unmerged after a bot review confirmed the fix. kanban-merged-review-sync is cut on top of this artifact."
+    },
+    {
+      "id": "kanban-merged-review-sync",
+      "title": "Merged review reconciliation",
+      "summary": "Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#117500](https://github.com/NousResearch/hermes-agent/pull/117500)",
+          "state": "open",
+          "merged_at": null,
+          "author": "aglowinthefield"
+        }
+      ],
+      "note": "Re-adapted on top of kanban-superseded-check-runs (its collect_acceptance hunk dropped) and now ships the reconciler module and its tests from the PR. Recheck handoff identity before completion; never bypass acceptance gates."
+    },
+    {
+      "id": "kanban-worktree-teardown",
+      "title": "Independent worktree cleanup",
+      "summary": "Clean completed, clean, fully pushed worktrees without waiting on children using independent workspaces; retain shared/scratch workspaces while needed.",
+      "default_enabled": true,
+      "maintenance": "upstream",
+      "sources": [
+        {
+          "reference": "[NousResearch/hermes-agent#123017](https://github.com/NousResearch/hermes-agent/pull/123017)",
+          "state": "open",
+          "merged_at": null,
+          "author": "aglowinthefield"
+        }
+      ],
+      "note": "Hand-ported onto upstream's terminal-parent sweep guard; retain until upstream behavior and regression tests are verified."
+    },
+    {
+      "id": "kanban-review-complete-action",
+      "title": "Review completion action",
+      "summary": "Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it.",
+      "default_enabled": true,
+      "maintenance": "homebrew",
+      "sources": [],
+      "note": "Local dashboard affordance; the backend already permits review-to-done completion."
     }
   ]
 }

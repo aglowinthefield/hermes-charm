@@ -47,3 +47,36 @@ jobs:
         run: uv sync --frozen --no-default-groups --python 3.14
       - name: Load Charm through native discovery in isolated homes
         run: python3 charm/scripts/runtime_smoke.py "$GITHUB_WORKSPACE/hermes/.venv/bin/hermes"
+  patches:
+    # Early warning: does the core bundle still apply to upstream main, and do the tests
+    # it carries pass there? Exit 2 means a patch needs a hand port before `hermes update`.
+    name: Patch bundle on upstream main
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: charm
+      - uses: actions/checkout@v4
+        with:
+          repository: NousResearch/hermes-agent
+          ref: main
+          path: hermes
+          # Three-way merges need the blobs each artifact was cut against.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - name: Prepare upstream's locked test environment
+        working-directory: hermes
+        run: uv sync --locked --python 3.14 --extra all --group dev
+      - name: Rebase the bundle onto main and run its tests
+        run: |
+          set -o pipefail
+          python3 charm/scripts/patch_series.py rebase --agent hermes --ref HEAD --tests \
+            --python "$GITHUB_WORKSPACE/hermes/.venv/bin/python" | tee series.json
+      - name: Summarize
+        if: always()
+        run: |
+          [ -s series.json ] || exit 0
+          jq -r '"Upstream \(.ref[0:12]): ok=\(.ok)", (.patches[] | "- \(.name): \(.state)"),
+                 (if (.regenerated // []) | length > 0 then "Regenerate before updating: \(.regenerated | join(", "))" else empty end)' \
+            series.json >> "$GITHUB_STEP_SUMMARY"

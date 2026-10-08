@@ -33,6 +33,50 @@ class CharmTests(unittest.TestCase):
         return subprocess.run([sys.executable, str(ROOT / 'charm.py'), *args],
                               env=self.env, capture_output=True, text=True)
 
+    def test_drift_rehearses_bundle_on_fetched_upstream_without_touching_checkout(self):
+        env = {**self.env, 'GIT_CONFIG_GLOBAL': os.devnull, 'GIT_CONFIG_NOSYSTEM': '1',
+               'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@t', 'GIT_COMMITTER_NAME': 't',
+               'GIT_COMMITTER_EMAIL': 't@t', 'TMPDIR': self.temp.name}
+
+        def git(repo, *args):
+            return subprocess.run(['git', '-C', str(repo), *args], env=env, check=True,
+                                  capture_output=True, text=True).stdout
+
+        upstream = Path(self.temp.name) / 'upstream'
+        subprocess.run(['git', 'init', '-q', '-b', 'main', str(upstream)], env=env, check=True)
+        text = ''.join(f'{i}\n' for i in range(20))
+        (upstream / 'f.txt').write_text(text)
+        git(upstream, 'add', '-A')
+        git(upstream, 'commit', '-qm', 'base')
+        git(self.agent, 'remote', 'add', 'origin', str(upstream))
+        git(self.agent, 'fetch', '-q', 'origin', 'main')
+        git(self.agent, 'checkout', '-q', '--detach', 'origin/main')
+        (self.agent / 'f.txt').write_text(text.replace('17\n', 'patched\n'))
+        patch = git(self.agent, 'diff')
+        git(self.agent, 'checkout', '-q', '--', 'f.txt')
+        patches = Path(self.temp.name) / 'patches'
+        patches.mkdir()
+        (patches / 'fix.patch').write_text(patch)
+        (patches / 'ACTIVE').write_text('fix\n')
+        (patches / 'pins.json').write_text(json.dumps({'fix': __import__('hashlib').sha256(patch.encode()).hexdigest()}))
+        (upstream / 'f.txt').write_text(text.replace('14\n', 'upstream\n'))
+        git(upstream, 'commit', '-qam', 'drift')
+        head = git(self.agent, 'rev-parse', 'HEAD')
+        result = subprocess.run([sys.executable, str(ROOT / 'charm.py'), 'drift'], capture_output=True, text=True,
+                                env={**env, 'LOCAL_PATCHES_DIR': str(patches)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual([p['state'] for p in report['patches']], ['merged'])
+        self.assertEqual(report['regenerated'], ['fix'])
+        self.assertEqual((patches / 'fix.patch').read_text(), patch, 'drift never rewrites artifacts')
+        self.assertEqual(git(self.agent, 'rev-parse', 'HEAD'), head)
+        self.assertEqual(git(self.agent, 'status', '--porcelain'), '')
+
+    def test_drift_flags_are_refused_elsewhere(self):
+        result = self.run_charm('check', '--tests')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('only apply to drift', result.stderr)
+
     def test_clean_home_check_reports_missing_patch_targets_without_helper_dependency(self):
         result = self.run_charm('check')
         self.assertNotEqual(result.returncode, 0)

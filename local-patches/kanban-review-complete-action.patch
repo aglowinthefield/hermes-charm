@@ -12,11 +12,11 @@ index 658ae11c5b..74cf925d0f 100644
          b(tx(t, "archive", "Archive"),   { status: "archived" }, task.status !== "archived",
            getDestructiveConfirm(t, "archived")),
 diff --git a/tests/plugins/test_kanban_dashboard_plugin.py b/tests/plugins/test_kanban_dashboard_plugin.py
-index aea5b9af2b..5e35f7943a 100644
+index 9c6f9b9de1..24a8766fcd 100644
 --- a/tests/plugins/test_kanban_dashboard_plugin.py
 +++ b/tests/plugins/test_kanban_dashboard_plugin.py
-@@ -76,6 +76,16 @@ def test_board_empty(client):
-     assert data["assignees"] == []
+@@ -80,6 +80,16 @@ def test_board_empty(client):
+     assert data["assignees"] == ["default"]
      assert data["latest_event_id"] == 0
  
 +

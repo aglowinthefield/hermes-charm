@@ -2,12 +2,9 @@
 # scripts/local-patches-ensure.sh reapplies them on every gateway/serve start (systemd
 # ExecStartPre), which covers the restart after `hermes update` stashes them.
 # Remove a line once its fix lands upstream. See README.md for each patch.
-kanban-worktree-teardown
 dashboard-dispatch-caps
 project-skills-worktree-trust
 multiplex-notice-profile-scope
-kanban-merged-review-sync
-kanban-review-complete-action
 idle-compact-watchdog-79357
 kanban-skill-pin-tolerance
 kanban-token-hygiene
@@ -15,3 +12,6 @@ kanban-token-hygiene
 kanban-branch-name-punctuation
 kanban-rate-limit-backoff
 kanban-superseded-check-runs
+kanban-merged-review-sync
+kanban-worktree-teardown
+kanban-review-complete-action

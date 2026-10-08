@@ -30,6 +30,7 @@ installation; preserve backups and require a fresh preflight before starting ser
 
 ```sh
 hermes charm check
+hermes charm drift --tests        # rehearse the bundle on origin/main before hermes update
 hermes charm disable kanban-worktree-teardown
 hermes charm apply --check
 hermes charm apply

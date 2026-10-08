@@ -5,10 +5,6 @@ description: Maintained Hermes customizations with explicit per-profile controls
 provides_tools: []
 capabilities: []
 config_schema:
-  kanban-worktree-teardown:
-    type: bool
-    default: true
-    description: "Independent worktree cleanup. Clean completed, clean, fully pushed worktrees without waiting on children using independent workspaces; retain shared/scratch workspaces while needed. Requires explicit apply and backend restart."
   dashboard-dispatch-caps:
     type: bool
     default: true
@@ -21,14 +17,6 @@ config_schema:
     type: bool
     default: true
     description: "Profile-owned lifecycle notices. Use the owning profile's preferences, language, cron store and delivery adapters for shutdown and interrupted-cron notices. Requires explicit apply and backend restart."
-  kanban-merged-review-sync:
-    type: bool
-    default: true
-    description: "Merged review reconciliation. Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads. Requires explicit apply and backend restart."
-  kanban-review-complete-action:
-    type: bool
-    default: true
-    description: "Review completion action. Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it. Requires explicit apply and backend restart."
   idle-compact-watchdog-79357:
     type: bool
     default: true
@@ -53,3 +41,15 @@ config_schema:
     type: bool
     default: true
     description: "Superseded check runs never veto PR acceptance. Judge each required check by its newest run per app. A cancelled run from a superseded workflow suite on the same head no longer rejects completion of a green or merged PR. Requires explicit apply and backend restart."
+  kanban-merged-review-sync:
+    type: bool
+    default: true
+    description: "Merged review reconciliation. Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads. Requires explicit apply and backend restart."
+  kanban-worktree-teardown:
+    type: bool
+    default: true
+    description: "Independent worktree cleanup. Clean completed, clean, fully pushed worktrees without waiting on children using independent workspaces; retain shared/scratch workspaces while needed. Requires explicit apply and backend restart."
+  kanban-review-complete-action:
+    type: bool
+    default: true
+    description: "Review completion action. Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it. Requires explicit apply and backend restart."

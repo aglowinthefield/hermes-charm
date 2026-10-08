@@ -1,9 +1,9 @@
 diff --git a/hermes_cli/kanban_db_workspace.py b/hermes_cli/kanban_db_workspace.py
-index 84afc9f5093c..6d6713f59be6 100644
+index 53c369f698..15ba82c730 100644
 --- a/hermes_cli/kanban_db_workspace.py
 +++ b/hermes_cli/kanban_db_workspace.py
-@@ -69,6 +69,36 @@ def _lexical_path(path: Path | str) -> Path:
-     return Path(_path_key(os.path.abspath(path)))
+@@ -77,6 +77,36 @@ def _has_active_children(conn: sqlite3.Connection, task_id: str) -> bool:
+     return conn.execute(_ACTIVE_CHILDREN_SQL, (task_id,)).fetchone() is not None
  
  
 +def _workspace_needed_by_children(
@@ -16,14 +16,14 @@ index 84afc9f5093c..6d6713f59be6 100644
 +    its content survives on the remote; children receive handoffs via run
 +    summaries and dispatch in their own worktrees. Only a child whose workspace
 +    sits inside this tree (decompose children inherit the root's path) needs it
-+    kept — deferring on every dependent pinned finished trees for as long as
++    kept; deferring on every dependent pinned finished trees for as long as
 +    downstream work stayed blocked.
 +    """
 +    if kind != "worktree":
 +        return _has_active_children(conn, task_id)
 +    rows = conn.execute(
 +        "SELECT t.workspace_path FROM task_links l JOIN tasks t ON t.id = l.child_id "
-+        "WHERE l.parent_id = ? AND t.status NOT IN ('done', 'archived', 'failed', 'cancelled')",
++        f"WHERE l.parent_id = ? AND t.status NOT IN {_TERMINAL_STATUSES_SQL}",
 +        (task_id,),
 +    ).fetchall()
 +    root = Path(path).expanduser().resolve(strict=False)
@@ -36,10 +36,10 @@ index 84afc9f5093c..6d6713f59be6 100644
 +    return False
 +
 +
- def _managed_scratch_path_info(p: Path) -> tuple[bool, Optional[str]]:
-     """Return whether *p* is managed scratch storage and the matching board.
- 
-@@ -191,7 +221,7 @@ def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
+ _TERMINAL_TASK_SQL = (
+     f"SELECT 1 FROM tasks WHERE id = ? AND status IN {_TERMINAL_STATUSES_SQL}"
+ )
+@@ -379,7 +409,7 @@ def _cleanup_workspace(conn: sqlite3.Connection, task_id: str) -> None:
              return
          # Defer while any child is not yet terminal so it can still read
          # handoff artifacts from this workspace.
@@ -48,10 +48,10 @@ index 84afc9f5093c..6d6713f59be6 100644
              _kb._log.debug(
                  "Deferring %s workspace cleanup for task %s: "
                  "active children still need workspace at %s",
-@@ -323,8 +353,10 @@ def _try_cleanup_parent_workspaces(conn: sqlite3.Connection, task_id: str) -> No
-                 not row
+@@ -515,7 +545,9 @@ def _try_cleanup_parent_workspaces(conn: sqlite3.Connection, task_id: str) -> No
                  or row["workspace_kind"] not in _REMOVABLE_KINDS
                  or not row["workspace_path"]
+                 or not _is_terminal_task(conn, parent_id)
 -                or _has_active_children(conn, parent_id)
 +                or _workspace_needed_by_children(
 +                    conn, parent_id, row["workspace_kind"], row["workspace_path"]
@@ -59,12 +59,11 @@ index 84afc9f5093c..6d6713f59be6 100644
              ):
                  continue
              ws_path = row["workspace_path"]
-             if row["workspace_kind"] == "worktree":
 diff --git a/tests/hermes_cli/test_kanban_worktree_teardown.py b/tests/hermes_cli/test_kanban_worktree_teardown.py
-index 84ff2c55ea2e..b993e31bceda 100644
+index 10f64d07e5..5a9a42493d 100644
 --- a/tests/hermes_cli/test_kanban_worktree_teardown.py
 +++ b/tests/hermes_cli/test_kanban_worktree_teardown.py
-@@ -266,24 +266,44 @@ def test_archive_task_reaps_clean_worktree(kanban_home: Path, repo: Path) -> Non
+@@ -266,26 +266,46 @@ def test_archive_task_reaps_clean_worktree(kanban_home: Path, repo: Path) -> Non
      assert not wt.exists()
  
  
@@ -116,3 +115,5 @@ index 84ff2c55ea2e..b993e31bceda 100644
 +        kbw._try_cleanup_parent_workspaces(conn, child)
 +    # last sharing child terminal -> deferred parent worktree reaped
      assert not parent_wt.exists()
+ 
+ 
