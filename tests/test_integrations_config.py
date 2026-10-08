@@ -27,6 +27,7 @@ def fixture(home):
                           "team_to_board": {"TEST": "example"},
                           "contract_by_board": {"example": "example/repo"},
                           "orchestrator": "planner", "orchestrator_label": "Planner",
+                          "hold_labels": ["needs-triage"],
                           "notifier": str(home / "absent-notifier")},
         "ci-watchdog": {**routing, "repo": "example/repo", "board": "example",
                         "contract": "example/repo", "daily_card_cap": 2,

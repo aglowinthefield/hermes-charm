@@ -3,6 +3,7 @@
 set -eu
 python3 - "$(dirname "$0")/../scripts/linear-intake.py" <<'PY'
 import importlib.util
+import io
 import json
 import os
 import sqlite3
@@ -10,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,6 +25,7 @@ fixture_config.write_text(json.dumps({"linear-intake": {
     "contract_by_board": {"example": "example/repo"},
     "implementer": "builder", "implementer_label": "Builder",
     "orchestrator": "planner", "orchestrator_label": "Planner",
+    "hold_labels": ["needs-triage", "needs-info"],
     "reviewer": "auditor", "review_path": str(Path(fixture_home.name) / "REVIEW.md"),
     "notify_platform": "test-platform", "notify_chat_id": "test-chat",
     "notify_chat_type": "channel", "notifier_profile": "test-notifier",
@@ -144,6 +147,46 @@ class LinearIntakeTest(unittest.TestCase):
                 conn.commit()
                 self.assertTrue(linear_intake.card_is_subscribed("example", "t_root"))
             conn.close()
+
+    def test_held_issue_dispatches_only_after_its_label_is_removed(self):
+        labels = [{"name": "Needs-Triage"}]
+        def assigned(_key):
+            held_issue = issue()
+            held_issue["labels"] = {"nodes": list(labels)}
+            return [held_issue]
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as directory:
+            state = Path(directory) / "state.json"
+            state.write_text(json.dumps({"seen": []}))
+            with patch.object(linear_intake, "STATE", state), \
+                 patch.object(linear_intake, "linear_key", return_value="key"), \
+                 patch.object(linear_intake, "fetch_open_assigned", side_effect=assigned), \
+                 patch.object(linear_intake, "intake_root_on_board", return_value=None), \
+                 patch.object(linear_intake, "already_on_board", return_value=None), \
+                 patch.object(linear_intake, "subscribe_card"), \
+                 patch.object(linear_intake, "notify"), \
+                 patch.object(linear_intake, "create_card",
+                              return_value=("t_new", True)) as create:
+                def tick():
+                    out = io.StringIO()
+                    with redirect_stdout(out):
+                        linear_intake.main()
+                    return out.getvalue(), json.loads(state.read_text())
+
+                printed, saved = tick()
+                create.assert_not_called()
+                self.assertIn("TEST-123 held by label 'Needs-Triage'", printed)
+                self.assertNotIn("TEST-123", saved["seen"])
+
+                printed, _ = tick()
+                create.assert_not_called()
+                self.assertEqual(printed, "", "a hold is reported once, not every tick")
+
+                labels[:] = [{"name": "ready-for-agent"}]
+                printed, saved = tick()
+                create.assert_called_once()
+                self.assertIn("example/t_new <- TEST-123", printed)
+                self.assertIn("TEST-123", saved["seen"])
+                self.assertEqual(saved["held"], {})
 
 
 suite = unittest.defaultTestLoader.loadTestsFromTestCase(LinearIntakeTest)

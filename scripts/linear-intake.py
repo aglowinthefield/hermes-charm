@@ -11,6 +11,10 @@ Run by `hermes cron` with --no-agent, so it costs no inference tokens. Each tick
      issues with child issues or no description go to the configured orchestrator instead,
   5. record it as seen; print only what was created (cron delivers stdout verbatim).
 
+An issue carrying any configured `hold_labels` label (for example `needs-triage`) is held:
+no card, and it is NOT recorded as seen, so removing the label later is what dispatches it.
+Each hold is reported once, the first tick it appears.
+
 Cards skip Triage because `kanban.auto_decompose` is off. Implementation-ready cards land in
 the implementer's worktree directly; the orchestrator is reserved for underspecified or multi-part work.
 
@@ -55,6 +59,7 @@ NOTIFIER_PROFILE = get("linear-intake", "notifier_profile")
 DELIVERY_MODE = get("linear-intake", "delivery_mode")
 NET_FAILS_BEFORE_ALERT = get("linear-intake", "net_fails_before_alert")
 NOTIFIER = get("linear-intake", "notifier")
+HOLD_LABELS = {label.strip().lower() for label in get("linear-intake", "hold_labels")}
 STATE = HOME / "kanban" / "linear-intake-state.json"
 
 QUERY = """
@@ -70,6 +75,7 @@ query($cursor: String) {
     nodes {
       identifier title description url
       team { key }
+      labels { nodes { name } }
       parent { identifier }
       children { nodes { identifier } }
     }
@@ -109,6 +115,14 @@ def fetch_open_assigned(key: str) -> list[dict]:
         if not page["pageInfo"]["hasNextPage"]:
             return out
         cursor = page["pageInfo"]["endCursor"]
+
+
+def hold_label(issue: dict) -> str | None:
+    """The first label that keeps this issue off the board, if any."""
+    for node in (issue.get("labels") or {}).get("nodes") or []:
+        if node["name"].strip().lower() in HOLD_LABELS:
+            return node["name"]
+    return None
 
 
 def assignee_for(issue: dict) -> str:
@@ -303,6 +317,8 @@ def main() -> int:
     now = datetime.now(timezone.utc).isoformat()
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
     seen: set[str] = set(state.get("seen", []))
+    previously_held: dict[str, str] = state.get("held", {})
+    held: dict[str, str] = {}
     first_run = "seen" not in state
 
     key = linear_key()
@@ -325,6 +341,12 @@ def main() -> int:
             seen.add(ident)
             continue
         if ident in seen:
+            continue
+        if label := hold_label(issue):
+            # Not marked seen: dropping the label is what releases it to the board.
+            held[ident] = label
+            if not first_run and previously_held.get(ident) != label:
+                report.append(f"{ident} held by label {label!r}; no card until it is removed")
             continue
         seen.add(ident)
         if first_run:
@@ -349,7 +371,8 @@ def main() -> int:
             report.append(f"{board}/{task_id} <- {ident}: {issue['title']}  {issue['url']}")
 
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps({"seen": sorted(seen), "last_run": now}, indent=2))
+    STATE.write_text(json.dumps(
+        {"seen": sorted(seen), "held": dict(sorted(held.items())), "last_run": now}, indent=2))
 
     if first_run:
         print(f"linear-intake: seeded {len(seen)} assigned issues as seen, nothing backfilled")
