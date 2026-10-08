@@ -68,10 +68,8 @@ query($cursor: String) {
   ) {
     pageInfo { hasNextPage endCursor }
     nodes {
-      identifier title description url priorityLabel
-      state { name type }
+      identifier title description url
       team { key }
-      labels { nodes { name } }
       parent { identifier }
       children { nodes { identifier } }
     }
@@ -163,16 +161,14 @@ def branch_for(board: str, issue: dict) -> str:
 def build_body(issue: dict, assignee: str) -> str:
     """Build an execution card or an exception-intake card."""
     ident = issue["identifier"]
-    labels = ", ".join(l["name"] for l in issue["labels"]["nodes"]) or "none"
-    desc = (issue.get("description") or "").strip() or "_No description in Linear._"
     action = "Implement" if assignee == IMPLEMENTER else "Plan and route"
     lines = [
         "## Goal",
         f"{action} [{ident}]({issue['url']}): {issue['title']}",
         "",
         "## Context",
-        f"- Linear: [{ident}]({issue['url']})",
-        f"- State: {issue['state']['name']} · Priority: {issue['priorityLabel']} · Labels: {labels}",
+        f"- Spec: read [{ident}]({issue['url']}) from its task-tracking platform using the appropriate"
+        " available integration before starting. The linked task is the authoritative specification.",
     ]
     if issue.get("parent"):
         lines.append(f"- Parent issue: {issue['parent']['identifier']}")
@@ -181,12 +177,12 @@ def build_body(issue: dict, assignee: str) -> str:
         lines.append(f"- Child issues: {', '.join(children)}")
     if assignee == IMPLEMENTER:
         criteria = [
-            "- [ ] Implement the Linear issue as one focused PR and verify the affected behavior.",
+            "- [ ] Implement the linked task as one focused PR and verify the affected behavior.",
             f'- [ ] The PR body carries "Closes {ident}".',
             f'- [ ] Open one draft PR and call `kanban_request_review(reviewer="{REVIEWER}")` with its URL.',
         ]
     else:
-        reason = "it has child issues" if children else "its Linear description is empty"
+        reason = "it has child issues" if children else "its task description is empty"
         criteria = [
             f"- [ ] Resolve the orchestration exception: {reason}.",
             f"- [ ] Route one implementation card to {IMPLEMENTER_LABEL} when this is one PR; fan out only when separate PRs are necessary.",
@@ -195,10 +191,6 @@ def build_body(issue: dict, assignee: str) -> str:
         "",
         "## Acceptance criteria",
         *criteria,
-        "",
-        "## Linear description",
-        "",
-        desc,
     ]
     if assignee == IMPLEMENTER:
         lines += [

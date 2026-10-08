@@ -145,7 +145,7 @@ class SettingsTests(unittest.TestCase):
         module = self.load("linear-intake.py")
         self.assertEqual(module.HOME, self.home)
         self.assertEqual(module.TEAM_TO_BOARD, {"TEST": "example"})
-        issue = {"identifier": "TEST-1", "title": "Example", "description": "Implement",
+        issue = {"identifier": "TEST-1", "title": "Example", "description": "Linear-only spec text",
                  "url": "https://example.test/issue", "labels": {"nodes": []},
                  "state": {"name": "Todo"}, "priorityLabel": "High", "children": {"nodes": []}}
         with patch.object(module.subprocess, "run", return_value=subprocess.CompletedProcess(
@@ -159,12 +159,35 @@ class SettingsTests(unittest.TestCase):
         self.assertIn("example/repo", create)
         self.assertIn('reviewer="auditor"', module.build_body(issue, "builder"))
         self.assertIn(str(self.home / "REVIEW.md"), module.build_body(issue, "builder"))
+        # The card links the issue instead of copying it; workers read it live from Linear.
+        for assignee in ["builder", "planner"]:
+            body = module.build_body(issue, assignee)
+            self.assertNotIn("Linear-only spec text", body)
+            self.assertIn("https://example.test/issue", body)
         for value in ["test-platform", "test-chat", "test-notifier"]:
             self.assertIn(value, subscribe)
         with patch.object(module.subprocess, "run", return_value=subprocess.CompletedProcess(
                 [], 0, stdout="test-key", stderr="")) as run, patch.dict(os.environ, {}, clear=True):
             self.assertEqual(module.linear_key(), "test-key")
         self.assertEqual(run.call_args.args[0], ["op", "read", "op://Test/Linear/credential"])
+
+    def test_card_instructions_use_the_linked_task_platform(self):
+        self.config.write_text(json.dumps(fixture(self.home)))
+        module = self.load("linear-intake.py")
+        for assignee, description, children in [
+                ("builder", "Implement", []),
+                ("planner", "", []),
+                ("planner", "Plan children", [{"identifier": "TEST-2"}])]:
+            with self.subTest(assignee=assignee, description=description):
+                issue = {"identifier": "TEST-1", "title": "Example", "description": description,
+                         "url": "https://example.test/issue", "labels": {"nodes": []},
+                         "state": {"name": "Todo"}, "priorityLabel": "High",
+                         "children": {"nodes": children}}
+                body = module.build_body(issue, assignee)
+                self.assertIn("[TEST-1](https://example.test/issue)", body)
+                self.assertIn("task-tracking platform", body)
+                self.assertIn("before starting", body)
+                self.assertNotIn("linear", body.lower())
 
     def test_ci_live_write_path_is_mocked_and_state_is_isolated(self):
         self.config.write_text(json.dumps(fixture(self.home)))
