@@ -1,7 +1,8 @@
 #!/bin/sh
 # Consolidated review gate: every review goes implementer -> reviewer -> operator, and an operator
-# handoff is allowed only when its exact PR head has passing CI. The hook is read-only: draft
-# readiness and merging remain operator actions.
+# handoff is allowed only when its exact PR head has passing CI. That allowed handoff then marks a
+# draft PR ready for review on the operator's behalf: the operator chose this gate as the moment
+# the PR reaches them. No agent marks a PR ready by its own call, and nothing here merges.
 #
 # kanban_request_review: a reviewer is required. Other workers must name the reviewer profile.
 # Only the reviewer, and only from a review run, may park a card on the operator.
@@ -104,7 +105,8 @@ esac
 
 # This is now a valid reviewer -> operator handoff. No-code cards need an explicit receipt;
 # code cards need an exact PR URL and passing checks at its current head. Skipped checks count
-# as passing, matching GitHub's treatment of optional jobs. Nothing here mutates GitHub.
+# as passing, matching GitHub's treatment of optional jobs. The only GitHub write is the final
+# `gh pr ready`, after every check above has passed.
 PR=$(field .tool_input.metadata.published_pr)
 if [ -z "$PR" ]; then
   [ "$(field .tool_input.metadata.no_pr)" = "true" ] && exit 0
@@ -113,7 +115,7 @@ fi
 printf '%s' "$PR" | grep -Eq '^https://github\.com/[^/]+/[^/]+/pull/[0-9]+/?$' || \
   block "Human-review handoff blocked: metadata.published_pr must be an exact GitHub pull-request URL."
 
-PR_JSON=$($GH pr view "$PR" --json state,headRefOid 2>/dev/null) || \
+PR_JSON=$($GH pr view "$PR" --json state,isDraft,headRefOid 2>/dev/null) || \
   block "Human-review handoff blocked: could not read $PR with gh. Verify authentication and PR URL, then retry."
 STATE=$(printf '%s' "$PR_JSON" | jq -r '.state // ""')
 HEAD=$(printf '%s' "$PR_JSON" | jq -r '.headRefOid // ""')
@@ -129,4 +131,8 @@ NOT_PASSING=$(printf '%s' "$CHECKS" | jq -r '[.[] | select(.bucket != "pass" and
 [ -z "$NOT_PASSING" ] || \
   block "Human-review handoff blocked: CI is not green for $PR at ${HEAD%????????????????????????????????}: $NOT_PASSING. Fix failures or wait for pending checks, then retry."
 
+if [ "$(printf '%s' "$PR_JSON" | jq -r '.isDraft')" = "true" ]; then
+  $GH pr ready "$PR" >/dev/null 2>&1 || \
+    block "Human-review handoff blocked: CI is green but could not mark $PR ready for review with gh. Retry."
+fi
 exit 0

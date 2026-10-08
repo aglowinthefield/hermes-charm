@@ -67,7 +67,8 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
       ;;
     *)
       case "$3" in
-        */4|*/5|*/6) echo '{"state":"OPEN","headRefOid":"4444444444444444444444444444444444444444"}' ;;
+        */4|*/5|*/6|*/11) echo '{"state":"OPEN","isDraft":true,"headRefOid":"4444444444444444444444444444444444444444"}' ;;
+        */10) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444"}' ;;
         */7) echo '{"state":"CLOSED","headRefOid":"7777777777777777777777777777777777777777"}' ;;
         *) exit 1 ;;
       esac
@@ -75,11 +76,13 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
   esac
 elif [ "$1" = pr ] && [ "$2" = checks ]; then
   case "$3" in
-    */4) echo '[{"name":"test","state":"SUCCESS","bucket":"pass","workflow":"CI","link":"https://ci/4"}]' ;;
+    */4|*/10|*/11) echo '[{"name":"test","state":"SUCCESS","bucket":"pass","workflow":"CI","link":"https://ci/4"}]' ;;
     */5) echo '[{"name":"test","state":"PENDING","bucket":"pending","workflow":"CI","link":"https://ci/5"}]' ;;
     */6) echo '[]' ;;
     *) exit 1 ;;
   esac
+elif [ "$1" = pr ] && [ "$2" = ready ]; then
+  case "$3" in */11) exit 1 ;; esac
 else
   exit 99
 fi
@@ -113,20 +116,35 @@ h() { # $1 expect $2 published_pr
   label="jester -> tom pr=$2"
   if [ "$got" = "$1" ]; then printf 'ok    %-5s %s\n' "$1" "$label"; else printf 'FAIL  want %s got %s  %s\n' "$1" "$got" "$label"; fail=1; fi
 }
-h allow https://github.com/o/r/pull/4
+# Blocked handoffs never touch GitHub.
 h block https://github.com/o/r/pull/5
 h block https://github.com/o/r/pull/6
 h block https://github.com/o/r/pull/7
 h block https://github.com/o/r/pull/8
-if grep -Eq 'pr ready| api ' "$GH_LOG"; then
-  printf 'FAIL  review gate mutated GitHub\n'; fail=1
+if grep -q 'pr ready' "$GH_LOG"; then
+  printf 'FAIL  blocked handoff marked a PR ready\n'; fail=1
 else
-  printf 'ok    read-only GitHub verification\n'
+  printf 'ok    blocked handoffs leave GitHub alone\n'
 fi
-if grep -q 'isDraft' "$GH_LOG"; then
-  printf 'FAIL  review gate queried obsolete draft state\n'; fail=1
+# A green handoff marks the draft PR ready on the operator's behalf; an already-ready PR is left
+# alone; a failed mark refuses the handoff so the card and the PR never disagree.
+h allow https://github.com/o/r/pull/4
+h allow https://github.com/o/r/pull/10
+h block https://github.com/o/r/pull/11
+if grep -qx 'pr ready https://github.com/o/r/pull/4' "$GH_LOG"; then
+  printf 'ok    green handoff marks draft PR ready\n'
 else
-  printf 'ok    draft state is operator-owned\n'
+  printf 'FAIL  green handoff did not mark draft PR ready\n'; fail=1
+fi
+if grep -q 'pr ready https://github.com/o/r/pull/10' "$GH_LOG"; then
+  printf 'FAIL  already-ready PR was marked again\n'; fail=1
+else
+  printf 'ok    already-ready PR left alone\n'
+fi
+if grep -Eq ' api |pr merge|--undo' "$GH_LOG"; then
+  printf 'FAIL  review gate made an unexpected GitHub write\n'; fail=1
+else
+  printf 'ok    only write is pr ready\n'
 fi
 
 rm -rf "$(dirname "$DB")"
