@@ -18,6 +18,10 @@ EM=$(printf '\342\200\224')     # em dash
 printf 'Summary\n\n- Adds the `x` flag.\n' > "$D/clean.md"
 printf 'Summary\n\nThis is a pivotal change %s really.\n' "$EM" > "$D/dirty.md"
 printf '{"title":"t","body":"Fixes the parser."}' > "$D/clean.json"
+printf '<!-- hermes-agent: jester -->\n## \342\232\224\357\270\217 jester \302\267 reviewer \302\267 round 1\n\nApproved. `foo.ts:12` checked.\n\n---\n*Hermes kanban \302\267 t_1 \302\267 abc123*\n' > "$D/comment.md"
+printf '<!-- claude-code: scribe -->\n## \360\237\226\212\357\270\217 scribe \302\267 implementer\n\nFixed.\n' > "$D/oldmarker.md"
+printf 'Done \342\234\205 shipped.\n' > "$D/bodyemoji.md"
+printf '$(cat <<EOF\n<!-- hermes-agent: jester -->\nApproved.\nEOF\n' > "$D/residue.md"
 printf '{"title":"t","body":"I delve into it."}' > "$D/dirty.json"
 
 # not a PR body
@@ -25,7 +29,6 @@ t allow 'git status'
 t allow "$GH view 1844"
 t allow "$GH edit 1844 --title \"x\""
 t allow "$GH edit 1844 --add-label perf"
-t allow "$GH comment 1844 --body 'I think this is pivotal'"
 t allow "$GH create --title t"
 t allow "echo hello | ghpr create --body x"
 t allow "echo \"$GH create --body 'I delve'\""
@@ -103,6 +106,37 @@ t block "$GH create -T bug_report.md"
 t block "$GH create --body \"\$BODY\""
 t block "$GH edit 1844 --body-file missing.md"
 t block "$API repos/o/r/pulls --input missing.json"
+
+# comments: --body-file only, quoted heredocs, current marker, unslop rules
+t allow "$GH comment 1844 --body-file comment.md"
+t allow "$GH comment 1844 -F $D/comment.md"
+t allow "gh issue comment 9 --body-file comment.md"
+t allow "$GH comment 1844 --body-file - <<'EOF'
+Fixed in \`abc123\`: \`foo.ts:12\` now checks \$(x).
+EOF"
+t allow "$GH comment 1844 --body-file - <<EOF
+Fixed in abc123.
+EOF"
+t allow "$GH comment 1844 --edit-last --web"
+t block "$GH comment 1844 --body 'Fixed it.'"
+t block "$GH comment 1844 --body \"Fixed \\\`foo\\\`.\""
+t block "$GH comment 1844 -b 'Fixed it.'"
+t block "$GH comment 1844 --body-file - <<EOF
+Fixed \`foo.ts\`.
+EOF"
+t block "$GH comment 1844 --body-file oldmarker.md"
+t block "$GH comment 1844 --body-file bodyemoji.md"
+t block "$GH comment 1844 --body-file residue.md"
+t block "$GH comment 1844 --body-file - <<'EOF'
+I fixed it.
+EOF"
+t block "$GH create --title t --body-file - <<EOF
+Adds \`x\`.
+EOF"
+r=$(reason "$GH comment 1844 --body \"x\"")
+case "$r" in *"--body-file"*) echo "ok    comment reason asks for --body-file" ;; *) echo "FAIL  reason: $r"; fail=1 ;; esac
+r=$(reason "$GH comment 1844 --body-file oldmarker.md")
+case "$r" in *"hermes-agent"*) echo "ok    reason names the marker" ;; *) echo "FAIL  reason: $r"; fail=1 ;; esac
 
 # the old marker is a claim, not a bypass
 t block "HERMES_HUMANIZED=1 $GH create --title t --body 'I did it'"

@@ -30,6 +30,17 @@ wrappers, an absolute path, or inside `sh -c`, `eval`, `$(...)`, backticks):
   - gh api POST/PATCH to .../pulls or .../pulls/N with a body field or --input
   - gh api graphql calling createPullRequest or updatePullRequest
 Text inside a quoted argument (`echo "gh pr create --body x"`) is not a command.
+
+`gh pr comment` / `gh issue comment` bodies get the same lint and two more rules,
+because agents post them under the operator's account too:
+  - the body must come from --body-file (a file, or `-` with a quoted heredoc).
+    `--body "..."` lets the shell run `code` spans as commands and post the
+    result, which is how agent comments reached GitHub with empty code spans.
+  - an agent attribution marker is `<!-- hermes-agent: <profile> -->`. The
+    `## <emoji> <profile> · <role>` heading may keep its emoji.
+Any body fed by an unquoted heredoc that contains backticks or `$(` is blocked
+(the shell expands them), and a body carrying `$(cat <<` or a bare `EOF` line
+is blocked as leaked shell syntax.
 """
 
 import json
@@ -118,6 +129,9 @@ RULES = [
         "the body is posted under the operator's account; name the actor or drop the pronoun",
     ),
 ]
+OLD_MARKER = re.compile(r"<!--\s*claude-code:")
+ATTRIBUTION = re.compile(r"^##\s+\S+\s+(scribe|jester|princess|page)\s+·")
+RESIDUE = re.compile(r"\$\(\s*cat\s*<<|^\s*['\"]?EOF['\"]?\s*$")
 MASKS = [
     re.compile(r"<!--.*?-->", re.S),  # template comments
     re.compile(r"(^|\n)(`{3,}|~{3,})[^\n]*\n.*?\n\2[^\n]*", re.S),  # fenced code
@@ -126,16 +140,30 @@ MASKS = [
 ]
 
 
-def lint(body: str) -> list[str]:
+def lint(body: str, comment: bool = False) -> list[str]:
     """Return one message per rule hit, with its line number."""
-    for mask in MASKS:  # blank masked spans but keep line numbering
-        body = mask.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), body)
     hits = []
     for n, line in enumerate(body.split("\n"), 1):
+        if OLD_MARKER.search(line):
+            hits.append(
+                f"line {n}: agent marker \"{line.strip()}\" -> line 1 is "
+                "<!-- hermes-agent: <profile> -->"
+            )
+    for mask in MASKS:  # blank masked spans but keep line numbering
+        body = mask.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), body)
+    for n, line in enumerate(body.split("\n"), 1):
+        if RESIDUE.search(line):
+            hits.append(
+                f'line {n}: leaked shell syntax "{line.strip()}" -> post the text from '
+                "--body-file, not the command that builds it"
+            )
         quoted = line.lstrip().startswith(">")
+        heading = comment and ATTRIBUTION.match(line)
         for pattern, what, fix in RULES:
             if quoted and what == "first person":
                 continue  # quoting someone else's words
+            if heading and what == "emoji":
+                continue  # the profile emoji in the attribution heading
             for m in pattern.finditer(line):
                 hits.append(f'line {n}: {what} "{m.group(0).strip()}" -> {fix}')
     return hits
@@ -148,19 +176,24 @@ class Unreadable(Exception):
     """The command sets a PR body the hook cannot see."""
 
 
-def heredoc_bodies(cmd: str) -> list[str]:
+class Expands(Exception):
+    """The shell would rewrite the body before gh sends it."""
+
+
+def heredoc_bodies(cmd: str) -> list[tuple[bool, str]]:
+    """(delimiter quoted, body) for each heredoc in the command."""
     bodies, pending, current = [], [], []
     for line in cmd.split("\n"):
         if pending:
-            strip_tabs, word = pending[0]
+            strip_tabs, word, quoted = pending[0]
             if (line.lstrip("\t") if strip_tabs else line) == word:
-                bodies.append("\n".join(current))
+                bodies.append((quoted, "\n".join(current)))
                 current = []
                 pending.pop(0)
             else:
                 current.append(line)
             continue
-        pending = [(m.group(1) == "-", m.group(3)) for m in HEREDOC.finditer(line)]
+        pending = [(m.group(1) == "-", m.group(3), bool(m.group(2))) for m in HEREDOC.finditer(line)]
     return bodies
 
 
@@ -251,7 +284,13 @@ class Context:
     def stdin_body(self) -> str:
         if not self.heredocs:
             raise Unreadable("the body comes from piped stdin")
-        return "\n".join(self.heredocs)  # several heredocs: check them all
+        for quoted, body in self.heredocs:
+            if not quoted and re.search(r"`|\$\(|\$\{", body):
+                raise Expands(
+                    "the heredoc delimiter is unquoted, so the shell runs every `code span` and "
+                    "$(...) in the body and posts the output; quote it as <<'EOF'"
+                )
+        return "\n".join(body for _, body in self.heredocs)  # several heredocs: check them all
 
     def literal(self, value: str) -> str:
         if value.startswith("$(cat <<") or value.startswith("$(cat<<"):
@@ -275,6 +314,21 @@ def flag_value(args: list[str], j: int, names: tuple[str, ...]):
         if not name.startswith("--") and a.startswith(name) and len(a) > len(name):
             return a[len(name) :].lstrip("=")
     return None
+
+
+def comment_bodies(args: list[str], ctx: Context):
+    """Yield each body a `gh pr|issue comment` would post."""
+    rest = args[2:]
+    for j in range(len(rest)):
+        if flag_value(rest, j, ("--body", "-b")) is not None:
+            raise Expands(
+                "a comment body passed with --body goes through shell quoting, which runs "
+                "`code spans` inside double quotes; write it to a file and pass --body-file <path>, "
+                "or --body-file - with a <<'EOF' heredoc"
+            )
+        v = flag_value(rest, j, ("--body-file", "-F"))
+        if v is not None:
+            yield ctx.stdin_body() if v == "-" else ctx.read_file(v)
 
 
 def pr_bodies(args: list[str], ctx: Context):
@@ -354,17 +408,24 @@ def check(cmd: str, ctx: Context, depth: int = 0) -> list[str]:
             problems += check(" ".join(args), ctx, depth + 1)
         elif exe == "gh":
             try:
-                for body in pr_bodies(args, ctx):
-                    problems += lint(body)
+                if len(args) >= 2 and args[0] in ("pr", "issue") and args[1] == "comment":
+                    for body in comment_bodies(args, ctx):
+                        problems += lint(body, comment=True)
+                else:
+                    for body in pr_bodies(args, ctx):
+                        problems += lint(body)
             except Unreadable as e:
                 problems.append(f"UNREADABLE: {e}")
+            except Expands as e:
+                problems.append(f"SHELL: {e}")
     return problems
 
 
 def reason(problems: list[str]) -> str:
     unreadable = [p[len("UNREADABLE: ") :] for p in problems if p.startswith("UNREADABLE: ")]
-    hits = [p for p in problems if not p.startswith("UNREADABLE: ")]
-    parts = []
+    shell = [p[len("SHELL: ") :] for p in problems if p.startswith("SHELL: ")]
+    hits = [p for p in problems if not p.startswith(("UNREADABLE: ", "SHELL: "))]
+    parts = [f"The shell would change this body before it is posted: {s}." for s in shell]
     if unreadable:
         parts.append(
             "This hook checks every PR description against the unslop rules, and it cannot see "
@@ -373,7 +434,7 @@ def reason(problems: list[str]) -> str:
         )
     if hits:
         parts.append(
-            f"The PR description breaks the unslop rules ({UNSLOP}). Fix each of these, then "
+            f"The body breaks the unslop rules ({UNSLOP}). Fix each of these, then "
             "retry the same command:\n  " + "\n  ".join(hits)
         )
     parts.append(
@@ -398,7 +459,7 @@ def main() -> int:
     try:
         problems = check(cmd, ctx)
     except ValueError:  # unbalanced quotes: decide on the raw text, fail closed
-        if not re.search(r"\bgh\b.*\b(pr\s+(create|edit)|api)\b.*\bbody", cmd):
+        if not re.search(r"\bgh\b.*\b((pr|issue)\s+(create|edit|comment)|api)\b.*\bbody", cmd):
             return 0
         problems = ["UNREADABLE: the command could not be parsed"]
     if not problems:
