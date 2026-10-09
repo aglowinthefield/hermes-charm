@@ -148,6 +148,93 @@ class LinearIntakeTest(unittest.TestCase):
                 self.assertTrue(linear_intake.card_is_subscribed("example", "t_root"))
             conn.close()
 
+    def test_existing_open_pull_request_is_treated_as_external_work(self):
+        pull_request = {
+            "number": 3332,
+            "url": "https://github.com/example/repo/pull/3332",
+            "state": "OPEN",
+            "title": "feat: implement TEST-123",
+            "body": "Closes TEST-123",
+            "mergedAt": None,
+        }
+        with patch.object(
+            linear_intake.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["gh"], 0, stdout=json.dumps([pull_request]), stderr=""
+            ),
+        ) as run:
+            reason = linear_intake.existing_external_work("example", issue())
+        self.assertIn("open PR #3332", reason)
+        self.assertEqual(run.call_args.args[0][:4], ["gh", "pr", "list", "--repo"])
+
+    def test_malformed_pull_request_lookup_fails_open(self):
+        with patch.object(
+            linear_intake.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["gh"], 0, stdout="null", stderr=""
+            ),
+        ):
+            self.assertEqual(linear_intake.matching_pull_requests("example", "TEST-123"), [])
+
+    def test_existing_merged_pull_request_is_treated_as_external_work(self):
+        pull_request = {
+            "number": 3332,
+            "url": "https://github.com/example/repo/pull/3332",
+            "state": "MERGED",
+            "title": "feat: implement TEST-123",
+            "body": "Closes TEST-123",
+            "mergedAt": "2026-01-01T00:00:00Z",
+        }
+        with patch.object(
+            linear_intake.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["gh"], 0, stdout=json.dumps([pull_request]), stderr=""
+            ),
+        ):
+            reason = linear_intake.existing_external_work("example", issue())
+        self.assertEqual(reason, "merged PR #3332")
+
+    def test_existing_repository_branch_is_treated_as_external_work(self):
+        command_results = {
+            "gh": subprocess.CompletedProcess(["gh"], 0, stdout="[]", stderr=""),
+            "git": subprocess.CompletedProcess(
+                ["git"], 0, stdout="upstream/test-123-fix-card-hydration\n", stderr=""
+            ),
+        }
+
+        def fake_run(command, **kwargs):
+            return command_results[command[0]]
+
+        with patch.object(linear_intake, "board_repo", return_value=Path("/repo")), \
+             patch.object(linear_intake.subprocess, "run", side_effect=fake_run):
+            reason = linear_intake.existing_external_work("example", issue())
+        self.assertIn("repository branch", reason)
+        self.assertIn("upstream/test-123-fix-card-hydration", reason)
+
+    def test_main_skips_issue_with_external_work(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as directory:
+            state = Path(directory) / "state.json"
+            state.write_text(json.dumps({"seen": []}))
+            with patch.object(linear_intake, "STATE", state), \
+                 patch.object(linear_intake, "linear_key", return_value="key"), \
+                 patch.object(linear_intake, "fetch_open_assigned", return_value=[issue()]), \
+                 patch.object(linear_intake, "intake_root_on_board", return_value=None), \
+                 patch.object(linear_intake, "already_on_board", return_value=None), \
+                 patch.object(linear_intake, "existing_external_work", return_value="open PR #3332"), \
+                 patch.object(linear_intake, "create_card") as create, \
+                 patch.object(linear_intake, "notify"):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    linear_intake.main()
+                saved = json.loads(state.read_text())
+
+        create.assert_not_called()
+        self.assertIn("TEST-123 already has external work (open PR #3332); skipped", output.getvalue())
+        self.assertIn("TEST-123", saved["seen"])
+
     def test_held_issue_dispatches_only_after_its_label_is_removed(self):
         labels = [{"name": "Needs-Triage"}]
         def assigned(_key):
@@ -223,6 +310,7 @@ class LinearIntakeBlockerTest(unittest.TestCase):
             patch.object(linear_intake, "fetch_open_assigned", side_effect=lambda _k: assigned),
             patch.object(linear_intake, "intake_root_on_board", return_value=None),
             patch.object(linear_intake, "already_on_board", side_effect=lambda _b, i: cards.get(i)),
+            patch.object(linear_intake, "existing_external_work", return_value=None),
             patch.object(linear_intake, "subscribe_card"),
             patch.object(linear_intake, "notify"),
             patch.object(linear_intake, "create_card", side_effect=create),

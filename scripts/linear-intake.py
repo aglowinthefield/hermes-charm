@@ -7,7 +7,8 @@ Run by `hermes cron` with --no-agent, so it costs no inference tokens. Each tick
   3. diff against the `seen` set in the state file — an identifier seen once is never
      re-created by this script, which is what "newly assigned" means here,
   4. for each new one whose team key maps to a board, skip if a live card for that issue is
-     already on the board (title prefix or idempotency-key prefix), else create it for the configured implementer;
+     already on the board or if an existing PR/repository branch already carries the issue
+     identifier, else create it for the configured implementer;
      issues with child issues or no description go to the configured orchestrator instead,
      an open Linear "blocked by" issue becomes the card's kanban parent (the card waits in
      todo until the blocker's card is done), and an open blocker with no card yet holds it,
@@ -135,6 +136,22 @@ def assignee_for(issue: dict) -> str:
     return IMPLEMENTER if has_description and not has_children else ORCHESTRATOR
 
 
+def board_repo(board: str) -> Path | None:
+    try:
+        board_data = json.loads(
+            (HOME / "kanban" / "boards" / board / "board.json").read_text()
+        )
+        if not isinstance(board_data, dict):
+            return None
+        raw_repo = board_data.get("default_workdir")
+        if not isinstance(raw_repo, str) or not raw_repo:
+            return None
+        repo = Path(raw_repo).expanduser()
+        return repo if repo.is_dir() else None
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def branch_taken(board: str, branch: str) -> bool:
     db = HOME / "kanban" / "boards" / board / "kanban.db"
     if db.exists():
@@ -146,19 +163,87 @@ def branch_taken(board: str, branch: str) -> bool:
             pass
         finally:
             conn.close()
-    try:
-        board_data = json.loads((HOME / "kanban" / "boards" / board / "board.json").read_text())
-        repo = Path(board_data.get("default_workdir") or "").expanduser()
-        if repo.is_dir():
+    repo = board_repo(board)
+    if repo:
+        try:
             result = subprocess.run(
                 ["git", "-C", str(repo), "for-each-ref", "--count=1", "--format=%(refname)",
                  f"refs/heads/{branch}", f"refs/remotes/origin/{branch}"],
                 capture_output=True, text=True, timeout=15, check=False,
             )
             return bool(result.stdout.strip())
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
-        pass
+        except (OSError, subprocess.SubprocessError):
+            pass
     return False
+
+
+def matching_pull_requests(board: str, identifier: str) -> list[dict]:
+    """Return PRs whose title/body contains this exact issue identifier.
+
+    A failed GitHub lookup deliberately returns no matches: intake must not silently
+    drop new work because GitHub is unavailable.
+    """
+    repo = CONTRACT_BY_BOARD.get(board)
+    if not repo:
+        return []
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--repo", repo, "--state", "all", "--search", identifier,
+             "--limit", "1000", "--json", "number,url,state,title,body,mergedAt"],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        if result.returncode != 0:
+            return []
+        candidates = json.loads(result.stdout or "[]")
+        if not isinstance(candidates, list):
+            return []
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError, json.JSONDecodeError):
+        return []
+    pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(identifier)}(?![A-Za-z0-9])", re.IGNORECASE)
+    return [
+        pr for pr in candidates
+        if isinstance(pr, dict)
+        and pattern.search(f"{pr.get('title') or ''}\n{pr.get('body') or ''}")
+    ]
+
+
+def matching_repository_branches(board: str, identifier: str) -> list[str]:
+    repo = board_repo(board)
+    if not repo:
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "for-each-ref", "--format=%(refname:short)",
+             "refs/heads", "refs/remotes"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        if result.returncode != 0:
+            return []
+    except (OSError, subprocess.SubprocessError):
+        return []
+    pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(identifier.lower())}(?![A-Za-z0-9])")
+    return [
+        branch for branch in result.stdout.splitlines()
+        if pattern.search(branch.lower())
+    ]
+
+
+def existing_external_work(board: str, issue: dict) -> str | None:
+    """Describe already-started repository work, if any, without blocking on lookups."""
+    identifier = issue["identifier"]
+    prs = matching_pull_requests(board, identifier)
+    merged = [pr for pr in prs if pr.get("mergedAt") or str(pr.get("state", "")).upper() == "MERGED"]
+    if merged:
+        numbers = ", ".join(f"#{pr.get('number')}" for pr in merged)
+        return f"merged PR {numbers}"
+    open_prs = [pr for pr in prs if str(pr.get("state", "")).upper() == "OPEN"]
+    if open_prs:
+        numbers = ", ".join(f"#{pr.get('number')}" for pr in open_prs)
+        return f"open PR {numbers}"
+    branches = matching_repository_branches(board, identifier)
+    if branches:
+        return f"repository branch(es) {', '.join(branches[:3])}"
+    return None
 
 
 def branch_for(board: str, issue: dict) -> str:
@@ -382,6 +467,10 @@ def main() -> int:
         if existing := already_on_board(board, ident):
             seen.add(ident)
             report.append(f"{board}/{existing} already covers {ident}; skipped")
+            continue
+        if external := existing_external_work(board, issue):
+            seen.add(ident)
+            report.append(f"{ident} already has external work ({external}); skipped")
             continue
         pending.append((board, issue))
 
