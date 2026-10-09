@@ -24,6 +24,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
 import sys
 import time
 
@@ -95,10 +96,15 @@ def dispatch_profiles(home: Path) -> frozenset[str] | None:
     holds its children exactly like a `review` card. Counting it as movement hid a 58-todo stall.
     """
     try:
-        import yaml
-        config = yaml.safe_load((home / "config.yaml").read_text()) or {}
-        profiles = (config.get("kanban") or {}).get("dispatch_profiles")
-    except Exception:  # no yaml module or unreadable config: fall back to counting every ready card
+        result = subprocess.run(
+            ["hermes", "config", "get", "--json", "kanban.dispatch_profiles"],
+            capture_output=True, text=True, timeout=30, check=False,
+            env={**os.environ, "HERMES_HOME": str(home)},
+        )
+        profiles = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        # No Hermes CLI or unreadable config: fall back to counting every ready card. Hermes's
+        # reader is used instead of PyYAML because the cron interpreter does not ship PyYAML.
         return None
     return frozenset(profiles) if isinstance(profiles, list) and profiles else None
 

@@ -5,8 +5,10 @@ from contextlib import closing
 import importlib.util
 from pathlib import Path
 import sqlite3
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("kanban_stall_watch", ROOT / "scripts" / "kanban-stall-watch.py")
@@ -133,9 +135,20 @@ class StallWatchTests(unittest.TestCase):
 
     def test_dispatch_profiles_reads_config(self):
         home = Path(self.temp.name)
-        self.assertIsNone(watch.dispatch_profiles(home))
-        (home / "config.yaml").write_text("kanban:\n  dispatch_profiles:\n    - scribe\n    - page\n")
-        self.assertEqual(frozenset({"scribe", "page"}), watch.dispatch_profiles(home))
+
+        def config_get(command, **kwargs):
+            # The live Hermes reader, scoped to this home; it needs no PyYAML in the cron interpreter.
+            self.assertEqual(command, ["hermes", "config", "get", "--json", "kanban.dispatch_profiles"])
+            self.assertEqual(kwargs["env"]["HERMES_HOME"], str(home))
+            return subprocess.CompletedProcess(command, 0, stdout=answer, stderr="")
+
+        with mock.patch.object(watch.subprocess, "run", side_effect=config_get):
+            answer = "null\n"
+            self.assertIsNone(watch.dispatch_profiles(home))
+            answer = '["scribe", "page"]\n'
+            self.assertEqual(frozenset({"scribe", "page"}), watch.dispatch_profiles(home))
+        with mock.patch.object(watch.subprocess, "run", side_effect=FileNotFoundError("hermes")):
+            self.assertIsNone(watch.dispatch_profiles(home), "no Hermes CLI: count every ready card")
 
 
 if __name__ == "__main__":
