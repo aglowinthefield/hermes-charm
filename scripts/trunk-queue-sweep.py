@@ -42,6 +42,10 @@ from kanban_pr_owner import MOVING, implementer_of, owning_card
 Runner = Callable[[list[str]], "tuple[int, str, str]"]
 TrunkLookup = Callable[[int], "dict | None"]
 
+
+class TrunkAuthError(RuntimeError):
+    """The token was refused; every other lookup this tick would fail the same way."""
+
 AUTHOR = "trunk-queue-sweep"
 API = "https://api.trunk.io/v1/getSubmittedPullRequest"
 PLAYBOOK = "docs/agent-playbooks/rebase-regenerate.md"
@@ -72,6 +76,8 @@ def trunk_client(token: str, repo: str, target_branch: str) -> TrunkLookup:
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return None  # never submitted to this queue
+            if exc.code in (401, 403):
+                raise TrunkAuthError(f"Trunk API HTTP {exc.code}: the key cannot read queue state")
             raise RuntimeError(f"Trunk API HTTP {exc.code}: {exc.read().decode(errors='replace')[:200]}")
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             raise RuntimeError(f"Trunk API: {exc}")
@@ -172,6 +178,8 @@ def run(settings: dict, db: Path, state_path: Path, cmd: Runner, trunk: TrunkLoo
         key = str(pr["number"])
         try:
             entry = trunk(pr["number"])
+        except TrunkAuthError as exc:
+            return f"Trunk queue sweep for {settings['repo']}: {exc}. Fix TRUNK_API_TOKEN's permissions."
         except RuntimeError as exc:
             lines.append(f"- #{key}: Trunk lookup failed, retrying next tick: {exc}")
             continue

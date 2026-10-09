@@ -187,6 +187,20 @@ class TrunkQueueSweepTests(unittest.TestCase):
         self.tick(retry)
         self.assertEqual(("reopen-review", "t_one"), retry.actions()[1])
 
+    def test_refused_token_reports_one_line_and_stops(self):
+        self.card("t_one", "review", branch="b1")
+
+        class Refused(Fake):
+            def trunk(self, number):
+                self.trunk_calls.append(number)
+                raise sweep.TrunkAuthError("Trunk API HTTP 403")
+
+        fake = Refused([pr(7, "b1"), pr(8, "b2")])
+        report = self.tick(fake)
+        self.assertEqual([7], fake.trunk_calls)
+        self.assertEqual(1, len(report.splitlines()))
+        self.assertIn("HTTP 403", report)
+
     def test_failed_reopen_is_retried_next_tick(self):
         self.card("t_one", "review", branch="b1")
 
