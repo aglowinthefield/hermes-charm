@@ -12,7 +12,8 @@ Run by `hermes cron` with --no-agent, so it costs no inference tokens. Each tick
      issues with child issues or no description go to the configured orchestrator instead,
      an open Linear "blocked by" issue becomes the card's kanban parent (the card waits in
      todo until the blocker's card is done), and an open blocker with no card yet holds it,
-  5. record it as seen; print only what was created (cron delivers stdout verbatim).
+  5. record it as seen; remember externally-owned work and alert if that work later disappears;
+     print only what was created or needs attention (cron delivers stdout verbatim).
 
 An issue carrying any configured `hold_labels` label (for example `needs-triage`) is held:
 no card, and it is NOT recorded as seen, so removing the label later is what dispatches it.
@@ -177,15 +178,15 @@ def branch_taken(board: str, branch: str) -> bool:
     return False
 
 
-def matching_pull_requests(board: str, identifier: str) -> list[dict]:
-    """Return PRs whose title/body contains this exact issue identifier.
+def matching_pull_requests(board: str, identifier: str) -> tuple[list[dict], bool]:
+    """Return matching PRs and whether the GitHub lookup completed reliably.
 
-    A failed GitHub lookup deliberately returns no matches: intake must not silently
+    A failed lookup returns no matches with ``False``: intake must not silently
     drop new work because GitHub is unavailable.
     """
     repo = CONTRACT_BY_BOARD.get(board)
     if not repo:
-        return []
+        return [], False
     try:
         result = subprocess.run(
             ["gh", "pr", "list", "--repo", repo, "--state", "all", "--search", identifier,
@@ -193,24 +194,24 @@ def matching_pull_requests(board: str, identifier: str) -> list[dict]:
             capture_output=True, text=True, timeout=20, check=False,
         )
         if result.returncode != 0:
-            return []
+            return [], False
         candidates = json.loads(result.stdout or "[]")
         if not isinstance(candidates, list):
-            return []
+            return [], False
     except (OSError, subprocess.SubprocessError, TypeError, ValueError, json.JSONDecodeError):
-        return []
+        return [], False
     pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(identifier)}(?![A-Za-z0-9])", re.IGNORECASE)
     return [
         pr for pr in candidates
         if isinstance(pr, dict)
         and pattern.search(f"{pr.get('title') or ''}\n{pr.get('body') or ''}")
-    ]
+    ], True
 
 
-def matching_repository_branches(board: str, identifier: str) -> list[str]:
+def matching_repository_branches(board: str, identifier: str) -> tuple[list[str], bool]:
     repo = board_repo(board)
     if not repo:
-        return []
+        return [], False
     try:
         result = subprocess.run(
             ["git", "-C", str(repo), "for-each-ref", "--format=%(refname:short)",
@@ -218,32 +219,32 @@ def matching_repository_branches(board: str, identifier: str) -> list[str]:
             capture_output=True, text=True, timeout=15, check=False,
         )
         if result.returncode != 0:
-            return []
+            return [], False
     except (OSError, subprocess.SubprocessError):
-        return []
+        return [], False
     pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(identifier.lower())}(?![A-Za-z0-9])")
     return [
         branch for branch in result.stdout.splitlines()
         if pattern.search(branch.lower())
-    ]
+    ], True
 
 
-def existing_external_work(board: str, issue: dict) -> str | None:
-    """Describe already-started repository work, if any, without blocking on lookups."""
+def existing_external_work(board: str, issue: dict) -> tuple[str | None, bool]:
+    """Describe already-started repository work and lookup reliability."""
     identifier = issue["identifier"]
-    prs = matching_pull_requests(board, identifier)
+    prs, prs_reliable = matching_pull_requests(board, identifier)
     merged = [pr for pr in prs if pr.get("mergedAt") or str(pr.get("state", "")).upper() == "MERGED"]
     if merged:
         numbers = ", ".join(f"#{pr.get('number')}" for pr in merged)
-        return f"merged PR {numbers}"
+        return f"merged PR {numbers}", True
     open_prs = [pr for pr in prs if str(pr.get("state", "")).upper() == "OPEN"]
     if open_prs:
         numbers = ", ".join(f"#{pr.get('number')}" for pr in open_prs)
-        return f"open PR {numbers}"
-    branches = matching_repository_branches(board, identifier)
+        return f"open PR {numbers}", True
+    branches, branches_reliable = matching_repository_branches(board, identifier)
     if branches:
-        return f"repository branch(es) {', '.join(branches[:3])}"
-    return None
+        return f"repository branch(es) {', '.join(branches[:3])}", True
+    return None, prs_reliable and branches_reliable
 
 
 def branch_for(board: str, issue: dict) -> str:
@@ -430,6 +431,11 @@ def main() -> int:
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
     seen: set[str] = set(state.get("seen", []))
     previously_held: dict[str, str] = state.get("held", {})
+    raw_external_work = state.get("external_work", {})
+    external_work: dict[str, str] = {
+        ident: reason for ident, reason in raw_external_work.items()
+        if isinstance(ident, str) and isinstance(reason, str)
+    } if isinstance(raw_external_work, dict) else {}
     held: dict[str, str] = {}
     first_run = "seen" not in state
 
@@ -452,7 +458,21 @@ def main() -> int:
                     report.append(f"{ident}: {exc}")
                     continue
             seen.add(ident)
+            external_work.pop(ident, None)
             continue
+        if ident in external_work:
+            previous_external = external_work[ident]
+            current_external, reliable = existing_external_work(board, issue)
+            if current_external:
+                external_work[ident] = current_external
+            elif reliable:
+                del external_work[ident]
+                report.append(
+                    f"{ident} external work disappeared ({previous_external}); "
+                    "remove it from linear-intake-state.json to requeue"
+                )
+            if ident in seen:
+                continue
         if ident in seen:
             continue
         if label := hold_label(issue):
@@ -468,8 +488,10 @@ def main() -> int:
             seen.add(ident)
             report.append(f"{board}/{existing} already covers {ident}; skipped")
             continue
-        if external := existing_external_work(board, issue):
+        external, _ = existing_external_work(board, issue)
+        if external:
             seen.add(ident)
+            external_work[ident] = external
             report.append(f"{ident} already has external work ({external}); skipped")
             continue
         pending.append((board, issue))
@@ -516,7 +538,14 @@ def main() -> int:
 
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps(
-        {"seen": sorted(seen), "held": dict(sorted(held.items())), "last_run": now}, indent=2))
+        {
+            "seen": sorted(seen),
+            "held": dict(sorted(held.items())),
+            "external_work": dict(sorted(external_work.items())),
+            "last_run": now,
+        },
+        indent=2,
+    ))
 
     if first_run:
         print(f"linear-intake: seeded {len(seen)} assigned issues as seen, nothing backfilled")
