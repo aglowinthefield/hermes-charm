@@ -189,7 +189,107 @@ class LinearIntakeTest(unittest.TestCase):
                 self.assertEqual(saved["held"], {})
 
 
-suite = unittest.defaultTestLoader.loadTestsFromTestCase(LinearIntakeTest)
+def blocked(identifier, *blockers):
+    """An issue blocked by (identifier, state type) pairs, as Linear's inverseRelations report them."""
+    item = issue()
+    item["identifier"] = identifier
+    item["inverseRelations"] = {"nodes": [
+        {"type": "blocks", "issue": {"identifier": ident, "state": {"type": state}}}
+        for ident, state in blockers
+    ]}
+    return item
+
+
+class LinearIntakeBlockerTest(unittest.TestCase):
+    """Linear 'blocked by' relations become kanban parent edges, so a dependent card waits in todo."""
+
+    def run_ticks(self, assigned, cards):
+        """Tick main() against fixed assigned issues; `cards` maps identifier -> live board card."""
+        created = []
+
+        def create(_board, item, parents=()):
+            task_id = f"t_{item['identifier'].lower()}"
+            created.append((item["identifier"], list(parents)))
+            cards[item["identifier"]] = task_id
+            return task_id, True
+
+        directory = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR"))
+        self.addCleanup(directory.cleanup)
+        state = Path(directory.name) / "state.json"
+        state.write_text(json.dumps({"seen": []}))
+        patches = [
+            patch.object(linear_intake, "STATE", state),
+            patch.object(linear_intake, "linear_key", return_value="key"),
+            patch.object(linear_intake, "fetch_open_assigned", side_effect=lambda _k: assigned),
+            patch.object(linear_intake, "intake_root_on_board", return_value=None),
+            patch.object(linear_intake, "already_on_board", side_effect=lambda _b, i: cards.get(i)),
+            patch.object(linear_intake, "subscribe_card"),
+            patch.object(linear_intake, "notify"),
+            patch.object(linear_intake, "create_card", side_effect=create),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+        def tick():
+            out = io.StringIO()
+            with redirect_stdout(out):
+                linear_intake.main()
+            return out.getvalue(), json.loads(state.read_text())
+
+        return created, tick
+
+    def test_open_blocker_with_a_card_becomes_the_parent(self):
+        created, tick = self.run_ticks([blocked("TEST-2", ("TEST-1", "started"))], {"TEST-1": "t_one"})
+        tick()
+        self.assertEqual(created, [("TEST-2", ["t_one"])])
+
+    def test_finished_blocker_is_ignored(self):
+        created, tick = self.run_ticks(
+            [blocked("TEST-2", ("TEST-1", "completed"), ("TEST-3", "canceled"))], {})
+        tick()
+        self.assertEqual(created, [("TEST-2", [])])
+
+    def test_blocker_and_dependent_assigned_together_link_in_one_tick(self):
+        # Dependent listed first: the chain must still resolve blockers-first within the tick.
+        assigned = [blocked("TEST-3", ("TEST-2", "triage")),
+                    blocked("TEST-2", ("TEST-1", "triage")),
+                    blocked("TEST-1")]
+        created, tick = self.run_ticks(assigned, {})
+        tick()
+        self.assertEqual(created, [("TEST-1", []), ("TEST-2", ["t_test-1"]), ("TEST-3", ["t_test-2"])])
+
+    def test_open_blocker_without_a_card_holds_until_the_card_exists(self):
+        cards = {}
+        created, tick = self.run_ticks([blocked("TEST-2", ("TEST-1", "todo"))], cards)
+        printed, saved = tick()
+        self.assertEqual(created, [])
+        self.assertIn("TEST-2 held by open blocker TEST-1", printed)
+        self.assertNotIn("TEST-2", saved["seen"])
+
+        printed, _ = tick()
+        self.assertEqual(printed, "", "a blocker hold is reported once, not every tick")
+
+        cards["TEST-1"] = "t_one"
+        printed, saved = tick()
+        self.assertEqual(created, [("TEST-2", ["t_one"])])
+        self.assertIn("TEST-2", saved["seen"])
+        self.assertEqual(saved["held"], {})
+
+    def test_create_card_passes_each_parent(self):
+        with patch.object(linear_intake, "branch_taken", return_value=False), \
+             patch.object(linear_intake.subprocess, "run",
+                          side_effect=LinearIntakeTest.fake_create.__get__(self)) as run:
+            linear_intake.create_card("example", issue(), parents=["t_a", "t_b"])
+        command = run.call_args.args[0]
+        self.assertEqual([command[i + 1] for i, arg in enumerate(command) if arg == "--parent"],
+                         ["t_a", "t_b"])
+
+
+suite = unittest.TestSuite([
+    unittest.defaultTestLoader.loadTestsFromTestCase(LinearIntakeTest),
+    unittest.defaultTestLoader.loadTestsFromTestCase(LinearIntakeBlockerTest),
+])
 result = unittest.TextTestRunner(verbosity=2).run(suite)
 fixture_home.cleanup()
 raise SystemExit(not result.wasSuccessful())

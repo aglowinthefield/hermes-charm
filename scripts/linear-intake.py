@@ -9,6 +9,8 @@ Run by `hermes cron` with --no-agent, so it costs no inference tokens. Each tick
   4. for each new one whose team key maps to a board, skip if a live card for that issue is
      already on the board (title prefix or idempotency-key prefix), else create it for the configured implementer;
      issues with child issues or no description go to the configured orchestrator instead,
+     an open Linear "blocked by" issue becomes the card's kanban parent (the card waits in
+     todo until the blocker's card is done), and an open blocker with no card yet holds it,
   5. record it as seen; print only what was created (cron delivers stdout verbatim).
 
 An issue carrying any configured `hold_labels` label (for example `needs-triage`) is held:
@@ -78,6 +80,7 @@ query($cursor: String) {
       labels { nodes { name } }
       parent { identifier }
       children { nodes { identifier } }
+      inverseRelations { nodes { type issue { identifier state { type } } } }
     }
   }
 }
@@ -273,12 +276,36 @@ def card_is_subscribed(board: str, task_id: str) -> bool:
         conn.close()
 
 
-def create_card(board: str, issue: dict) -> tuple[str, bool]:
-    """Returns (task_id, created). created=False when idempotency returned an existing card."""
+def open_blockers(issue: dict) -> list[str]:
+    """Identifiers of unfinished issues that block this one (Linear's inverse `blocks` relations)."""
+    return [
+        node["issue"]["identifier"]
+        for node in (issue.get("inverseRelations") or {}).get("nodes") or []
+        if node.get("type") == "blocks"
+        and node["issue"]["state"]["type"] not in ("completed", "canceled")
+    ]
+
+
+def blocker_cards(board: str, issue: dict) -> tuple[list[str], str | None]:
+    """(parent card ids, first open blocker with no live card on this board, or None)."""
+    parents = []
+    for blocker in open_blockers(issue):
+        card = intake_root_on_board(board, blocker) or already_on_board(board, blocker)
+        if not card:
+            return [], blocker
+        parents.append(card)
+    return parents, None
+
+
+def create_card(board: str, issue: dict, parents: list[str] | tuple[str, ...] = ()) -> tuple[str, bool]:
+    """Returns (task_id, created). created=False when idempotency returned an existing card.
+    Parents gate the card in todo until every parent card is done."""
     title = f"{issue['identifier']}: {issue['title']}"[:200]
     assignee = assignee_for(issue)
     cmd = ["hermes", "kanban", "--board", board, "create", "--assignee", assignee,
            "--idempotency-key", issue["identifier"], "--created-by", "linear-intake"]
+    for parent in parents:
+        cmd += ["--parent", parent]
     if assignee == IMPLEMENTER:
         cmd += ["--workspace", "worktree", "--branch", branch_for(board, issue),
                 "--completion-contract", CONTRACT_BY_BOARD[board]]
@@ -325,6 +352,7 @@ def main() -> int:
     issues = fetch_open_assigned(key)
 
     report: list[str] = []
+    pending: list[tuple[str, dict]] = []
     for issue in issues:
         ident = issue["identifier"]
         board = TEAM_TO_BOARD.get(issue["team"]["key"])
@@ -348,14 +376,20 @@ def main() -> int:
             if not first_run and previously_held.get(ident) != label:
                 report.append(f"{ident} held by label {label!r}; no card until it is removed")
             continue
-        seen.add(ident)
         if first_run:
+            seen.add(ident)
             continue
         if existing := already_on_board(board, ident):
+            seen.add(ident)
             report.append(f"{board}/{existing} already covers {ident}; skipped")
             continue
+        pending.append((board, issue))
+
+    def intake(board: str, issue: dict, parents: list[str]) -> None:
+        ident = issue["identifier"]
+        seen.add(ident)
         try:
-            task_id, created = create_card(board, issue)
+            task_id, created = create_card(board, issue, parents)
             subscribe_card(board, task_id)
         except Exception as exc:
             # Only retry next tick when no card covers the issue. If the card was created
@@ -366,9 +400,30 @@ def main() -> int:
             if not (intake_root_on_board(board, ident) or already_on_board(board, ident)):
                 seen.discard(ident)
             report.append(f"{ident}: {exc}")
-            continue
+            return
         if created:
             report.append(f"{board}/{task_id} <- {ident}: {issue['title']}  {issue['url']}")
+
+    # An open Linear blocker becomes a kanban parent, so the card waits in todo until the
+    # blocker's card is done. Repeat passes so a chain assigned in one tick links in that tick.
+    waiting: list[tuple[str, dict, str]] = []
+    progress = True
+    while pending and progress:
+        progress, waiting = False, []
+        for board, issue in pending:
+            parents, missing = blocker_cards(board, issue)
+            if missing:
+                waiting.append((board, issue, missing))
+                continue
+            progress = True
+            intake(board, issue, parents)
+        pending = [(board, issue) for board, issue, _ in waiting]
+    for _board, issue, missing in waiting:
+        # Not marked seen: the blocker's card appearing is what releases it to the board.
+        ident, reason = issue["identifier"], f"blocker:{missing}"
+        held[ident] = reason
+        if previously_held.get(ident) != reason:
+            report.append(f"{ident} held by open blocker {missing}; no card until the blocker has one")
 
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps(
