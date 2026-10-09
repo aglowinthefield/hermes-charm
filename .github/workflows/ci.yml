@@ -20,8 +20,6 @@ jobs:
         with:
           python-version: '3.14'
       - run: sudo apt-get update && sudo apt-get install -y jq sqlite3
-      # Cron runs Charm scripts with Hermes's interpreter, which ships PyYAML; match it here.
-      - run: python3 -m pip install pyyaml
       - run: python3 -m unittest discover -s tests -v
       - run: sh agent-hooks/test-linear-intake.sh
       - run: sh -n scripts/local-patches-ensure.sh && sh -n scripts/charm-prestart.sh
