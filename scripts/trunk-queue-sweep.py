@@ -9,7 +9,8 @@ authored in the configured repo:
 
   1. Ask Trunk for the PR's queue entry (`getSubmittedPullRequest`, with its timeline). Never
      submitted, or in any state but `failed`, is silent. `pending_failure` waits for Trunk to
-     settle the blame.
+     settle the blame. A failure older than the PR's head commit is stale: someone already
+     pushed after it, so it is recorded and skipped.
   2. A failure the implementer can fix (a required check failed, or a merge conflict) whose
      owning card is in `review`, parked on the human assignee with no live claim: comment the
      failing checks or the conflicting PR, `reopen-review`, then reassign to the implementer
@@ -85,12 +86,27 @@ def trunk_client(token: str, repo: str, target_branch: str) -> TrunkLookup:
     return lookup
 
 
-def last_failure(entry: dict) -> tuple[dict, int | None]:
-    """The `failure` details and test PR number from the latest `failed` timeline entry."""
-    for event in reversed(entry.get("timeline") or []):
-        if event.get("state") == "failed":
-            return event.get("failure") or {}, (event.get("testRun") or {}).get("prNumber")
-    return {}, None
+def last_failure(entry: dict) -> tuple[dict, int | None, str]:
+    """The `failure` details, test PR number and timestamp of the latest `failed` timeline entry.
+
+    Trunk returns the timeline newest first, but sort by timestamp rather than trust that."""
+    failures = [event for event in entry.get("timeline") or [] if event.get("state") == "failed"]
+    if not failures:
+        return {}, None, ""
+    event = max(failures, key=lambda e: e.get("timestamp") or "")
+    return event.get("failure") or {}, (event.get("testRun") or {}).get("prNumber"), event.get("timestamp") or ""
+
+
+def head_committed_at(cmd: Runner, repo: str, sha: str) -> str:
+    rc, out, err = cmd(["gh", "api", f"repos/{repo}/commits/{sha}", "--jq", ".commit.committer.date"])
+    if rc != 0:
+        raise RuntimeError(f"gh api commit {sha[:12]} failed: {err.strip()[-200:]}")
+    return out.strip()
+
+
+def iso_order(stamp: str) -> str:
+    """RFC 3339 UTC stamps compare as strings once the fraction and suffix are dropped."""
+    return stamp.replace("Z", "")[:19]
 
 
 def rework_comment(pr: dict, failure: dict, test_pr: int | None) -> str:
@@ -185,7 +201,15 @@ def run(settings: dict, db: Path, state_path: Path, cmd: Runner, trunk: TrunkLoo
             continue
         if not entry or entry.get("state") != "failed" or state.get(key) == entry.get("id"):
             continue
-        failure, test_pr = last_failure(entry)
+        failure, test_pr, failed_at = last_failure(entry)
+        try:
+            pushed_at = head_committed_at(cmd, settings["repo"], pr["headRefOid"])
+        except RuntimeError as exc:
+            lines.append(f"- #{key}: {exc}; retrying next tick")
+            continue
+        if failed_at and iso_order(pushed_at) > iso_order(failed_at):
+            state[key] = entry.get("id")  # the branch moved on since the failure; nothing to route
+            continue
         done, message = handle(pr, failure, test_pr, settings, db, cmd)
         if done:
             state[key] = entry.get("id")

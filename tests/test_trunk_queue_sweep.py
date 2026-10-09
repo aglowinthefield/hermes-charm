@@ -34,25 +34,31 @@ def failed(entry="e1", reason="test_run_required_status_failed", statuses=(("tes
     if culprit:
         failure["conflictCulprit"] = {"type": "queue_pr", "prNumber": culprit,
                                       "prUrl": f"https://github.com/{REPO}/pull/{culprit}"}
+    # Trunk returns the timeline newest first; an older, different failure sits below.
     return {"id": entry, "state": "failed", "timeline": [
-        {"state": "testing", "testRun": {"prNumber": test_pr,
-                                         "prUrl": f"https://github.com/{REPO}/pull/{test_pr}"}},
-        {"state": "failed", "failure": failure,
+        {"state": "failed", "timestamp": "2026-10-09T16:30:33.082Z", "failure": failure,
          "testRun": {"prNumber": test_pr, "prUrl": f"https://github.com/{REPO}/pull/{test_pr}"}},
+        {"state": "testing", "timestamp": "2026-10-09T16:20:00.000Z",
+         "testRun": {"prNumber": test_pr, "prUrl": f"https://github.com/{REPO}/pull/{test_pr}"}},
+        {"state": "failed", "timestamp": "2026-10-09T15:00:00.000Z",
+         "failure": {"reason": "github_api_rate_limit_exceeded"}},
     ]}
 
 
 class Fake:
     """Answers gh and Trunk reads from fixtures and records every hermes write."""
 
-    def __init__(self, prs, entries=None, trunk_error=None):
+    def __init__(self, prs, entries=None, trunk_error=None, pushed_at="2026-10-09T16:00:00Z"):
         self.prs = prs
+        self.pushed_at = pushed_at
         self.entries = entries or {}
         self.trunk_error = trunk_error
         self.writes: list[list[str]] = []
         self.trunk_calls: list[int] = []
 
     def cmd(self, argv):
+        if argv[:2] == ["gh", "api"]:
+            return 0, self.pushed_at + "\n", ""
         if argv[0] == "gh":
             return 0, json.dumps(self.prs), ""
         self.writes.append(argv)
@@ -120,6 +126,13 @@ class TrunkQueueSweepTests(unittest.TestCase):
         resubmitted = Fake([pr(7, "b1")], {7: failed(entry="e2")})
         self.tick(resubmitted)
         self.assertEqual(("reopen-review", "t_one"), resubmitted.actions()[1])
+
+    def test_failure_older_than_the_head_commit_is_skipped_as_stale(self):
+        self.card("t_one", "review", branch="b1")
+        fake = Fake([pr(7, "b1")], {7: failed()}, pushed_at="2026-10-09T16:54:00Z")
+        self.assertEqual("", self.tick(fake))
+        self.assertEqual([], fake.writes)
+        self.assertEqual("", self.tick(Fake([pr(7, "b1")], {7: failed()})))  # recorded, not retried
 
     def test_merge_conflict_failure_names_the_culprit_and_the_rebase_playbook(self):
         self.card("t_one", "review", branch="b1")
