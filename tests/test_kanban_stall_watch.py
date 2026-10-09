@@ -121,6 +121,22 @@ class StallWatchTests(unittest.TestCase):
         self.assertIn("broken", report)
         self.assertIn("t_rev", report)
 
+    def test_ready_card_on_a_non_dispatch_assignee_is_held_not_moving(self):
+        # The dispatcher never claims tom's ready card, so its child can never start.
+        self.board("acme", [("t_gate", "SIL-7: decide", "tom", "ready"), ("t_c", "SIL-8: build", "scribe", "todo")],
+                   [("t_gate", "t_c")])
+        spawnable = frozenset({"scribe", "jester"})
+        self.assertEqual("", watch.run(self.boards, self.state, 0, spawnable))
+        report = watch.run(self.boards, self.state, 15 * 60, spawnable)
+        self.assertIn("0 ready/running, 1 todo", report)
+        self.assertIn("t_gate (ready, not dispatchable, tom)", report)
+
+    def test_dispatch_profiles_reads_config(self):
+        home = Path(self.temp.name)
+        self.assertIsNone(watch.dispatch_profiles(home))
+        (home / "config.yaml").write_text("kanban:\n  dispatch_profiles:\n    - scribe\n    - page\n")
+        self.assertEqual(frozenset({"scribe", "page"}), watch.dispatch_profiles(home))
+
 
 if __name__ == "__main__":
     unittest.main()
