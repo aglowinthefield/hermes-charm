@@ -28,13 +28,18 @@ def pr(number, branch, sha="a" * 40, mergeable="CONFLICTING", draft=False):
 class FakeCommands:
     """Answers gh/collector reads from fixtures and records every hermes write."""
 
-    def __init__(self, prs, verdicts=None, collector_fails=()):
+    def __init__(self, prs, verdicts=None, collector_fails=(), pr_comment_fails=False):
         self.prs = prs
         self.verdicts = verdicts or {}
         self.collector_fails = set(collector_fails)
+        self.pr_comment_fails = pr_comment_fails
         self.writes: list[list[str]] = []
+        self.pr_comments: list[list[str]] = []
 
     def __call__(self, argv):
+        if argv[:3] == ["gh", "pr", "comment"]:
+            self.pr_comments.append(argv)
+            return (1, "", "HTTP 403") if self.pr_comment_fails else (0, "", "")
         if argv[0] == "gh":
             return 0, json.dumps(self.prs), ""
         if argv[0] == "hermes":
@@ -98,6 +103,11 @@ class SweepTests(unittest.TestCase):
         comment = fake.writes[0][-1]
         self.assertIn("#7", comment)
         self.assertNotIn("https://github.com", comment)  # a PR URL in a comment holds respawns
+        [posted] = fake.pr_comments
+        self.assertEqual(pr(7, "wt/t_one")["url"], posted[3])
+        self.assertTrue(posted[-1].startswith("<!-- hermes-agent: aide -->\n## 🧭 aide · supervisor"))
+        self.assertIn("**builder**", posted[-1])
+        self.assertIn("t_one · aaaaaaa", posted[-1])
         self.assertIn("rebase-regenerate.md", comment)
         self.assertIn("package-lock.json", comment)
         self.assertIn("t_one", report)
@@ -117,14 +127,20 @@ class SweepTests(unittest.TestCase):
         self.tick(fake)
         self.assertEqual(("reopen-review", "t_two"), fake.acted()[-1])
 
-    def test_mergeable_drafts_and_unknown_are_ignored(self):
+    def test_mergeable_and_unknown_are_ignored(self):
         self.card("t_a", "review", branch="a")
-        self.card("t_b", "review", branch="b")
         self.card("t_c", "review", branch="c")
-        fake = FakeCommands([pr(1, "a", mergeable="MERGEABLE"), pr(2, "b", draft=True),
-                             pr(3, "c", mergeable="UNKNOWN")])
+        fake = FakeCommands([pr(1, "a", mergeable="MERGEABLE"), pr(3, "c", mergeable="UNKNOWN")])
         self.assertEqual("", self.tick(fake))
         self.assertEqual([], fake.writes)
+
+    def test_conflicting_draft_parked_for_review_is_reopened(self):
+        # Kanban workers open drafts and only the operator marks them ready, so a parked card's
+        # PR is usually still a draft when main moves under it.
+        self.card("t_d", "review", branch="d")
+        fake = FakeCommands([pr(4, "d", draft=True)])
+        self.tick(fake)
+        self.assertEqual(("reopen-review", "t_d"), fake.acted()[-1])
 
     def test_active_or_in_review_cards_are_left_alone_silently(self):
         self.card("t_run", "running", assignee="builder", branch="r", claim="lock")
@@ -193,6 +209,16 @@ class SweepTests(unittest.TestCase):
         report = self.tick(fake)
         self.assertEqual([], fake.writes)
         self.assertIn("no implementer", report)
+        self.assertEqual([], fake.pr_comments)
+
+    def test_failed_pr_comment_is_reported_and_not_retried(self):
+        self.card("t_one", "review", branch="wt/t_one")
+        report = self.tick(FakeCommands([pr(7, "wt/t_one")], pr_comment_fails=True))
+        self.assertIn("reopened t_one", report)
+        self.assertIn("Commenting on the PR failed: HTTP 403", report)
+        again = FakeCommands([pr(7, "wt/t_one")])
+        self.assertEqual("", self.tick(again))  # the card already moved; no second reopen or comment
+        self.assertEqual([], again.pr_comments)
 
     def test_gh_failure_is_reported(self):
         def broken(argv):

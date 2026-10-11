@@ -14,7 +14,7 @@ authored in the configured repo:
   2. A failure the implementer can fix (a required check failed, or a merge conflict) whose
      owning card is in `review`, parked on the human assignee with no live claim: comment the
      failing checks or the conflicting PR, `reopen-review`, then reassign to the implementer
-     from its last handoff into AI review, as pr-conflict-sweep does.
+     from its last handoff into AI review, and comment on the PR, as pr-conflict-sweep does.
   3. Card already moving or under AI review: leave it, and look again once it parks.
   4. Anything else (a queue or GitHub API failure, an unrecognised reason, a card that is
      human-held, finished or missing): report it once. The sweep never requeues a PR, creates
@@ -38,7 +38,7 @@ from typing import Callable
 import urllib.error
 import urllib.request
 
-from kanban_pr_owner import MOVING, implementer_of, owning_card
+from kanban_pr_owner import MOVING, implementer_of, owning_card, pr_comment_argv
 
 Runner = Callable[[list[str]], "tuple[int, str, str]"]
 TrunkLookup = Callable[[int], "dict | None"]
@@ -177,7 +177,18 @@ def handle(pr: dict, failure: dict, test_pr: int | None, settings: dict, db: Pat
     if rc != 0:
         return True, (f"- {label}: reopened {task}, but reassigning it to {implementer} failed: "
                       f"{err.strip()[-200:]}. Reassign it by hand.")
-    return True, f"- {label}: failed out of the Trunk queue ({reason}); reopened {task} for {implementer}."
+    if reason == CONFLICT:
+        culprit = (failure.get("conflictCulprit") or {}).get("prNumber")
+        why = f"a merge conflict against {f'#{culprit}' if culprit else '`main`'}"
+    else:
+        names = ", ".join(f"`{st.get('name', '?')}`" for st in failure.get("failureCausingStatuses") or [])
+        why = f"failing required checks ({names or 'none listed'})"
+    rc, _, err = cmd(pr_comment_argv(pr["url"], task, (
+        f"This PR failed out of the Trunk merge queue with {why}. I sent card {task} back to "
+        f"**{implementer}** to fix it on this branch; the card returns to review when CI is green."),
+        pr["headRefOid"]))
+    note = "" if rc == 0 else f" Commenting on the PR failed: {err.strip()[-200:]}"
+    return True, f"- {label}: failed out of the Trunk queue ({reason}); reopened {task} for {implementer}.{note}"
 
 
 def run(settings: dict, db: Path, state_path: Path, cmd: Runner, trunk: TrunkLookup) -> str:
@@ -253,7 +264,7 @@ def main() -> int:
         state.unlink(missing_ok=True)
 
         def cmd(argv: list[str]) -> tuple[int, str, str]:
-            if argv[0] == "hermes":
+            if argv[0] == "hermes" or argv[:3] == ["gh", "pr", "comment"]:
                 print("would run:", " ".join(argv[:6]))
                 return 0, "", ""
             return real(argv)

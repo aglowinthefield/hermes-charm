@@ -1,0 +1,10 @@
+{
+  "name": "charm",
+  "label": "Aide",
+  "description": "What the Aide supervisor profile is doing: its cron jobs, open kanban incidents and recent reports.",
+  "icon": "Activity",
+  "version": "1.0.0",
+  "tab": { "path": "/aide", "position": "end" },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

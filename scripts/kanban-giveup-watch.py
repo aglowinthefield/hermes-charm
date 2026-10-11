@@ -129,6 +129,8 @@ def check_board(db: Path, report: list[str]) -> None:
 def main() -> int:
     report: list[str] = []
     for db in sorted(BOARDS.glob("*/kanban.db")):
+        if db.parent.name.startswith(("_", "-")):  # `_archived/` holds removed boards
+            continue
         try:
             check_board(db, report)
         except Exception as exc:  # one bad board must not silence the others

@@ -1,7 +1,8 @@
-"""Find the kanban card that owns a GitHub PR, and the profile that implemented it.
+"""Find the kanban card that owns a GitHub PR, the profile that implemented it, and the PR a
+card published; and sign Aide's comments on the PRs whose cards it moves.
 
-Shared by the sweeps that send a parked PR back to its card (pr-conflict-sweep,
-trunk-queue-sweep). Read-only: callers make every board write through the hermes CLI.
+Shared by the Aide jobs that act on a PR's card (pr-conflict-sweep, trunk-queue-sweep,
+kanban-incident-watch). Read-only: callers make every write through the hermes and gh CLIs.
 """
 from __future__ import annotations
 
@@ -55,3 +56,26 @@ def implementer_of(db: Path, task_id: str, park_assignee: str) -> str | None:
         if isinstance(event, dict) and event.get("reviewer") != park_assignee and event.get("implementer"):
             return event["implementer"]
     return None
+
+
+def published_pr(db: Path, task_id: str) -> str | None:
+    """The PR URL the card's newest run published, if any."""
+    with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)) as conn:
+        rows = conn.execute("SELECT metadata FROM task_runs WHERE task_id = ? AND metadata LIKE ?"
+                            " ORDER BY id DESC", (task_id, "%published_pr%")).fetchall()
+    for (metadata,) in rows:
+        try:
+            url = json.loads(metadata).get("published_pr")
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if url:
+            return url
+    return None
+
+
+def pr_comment_argv(pr_url: str, task_id: str, body: str, sha: str = "") -> list[str]:
+    """`gh pr comment` in the agent comment format the kanban workers use (silk-remix AGENTS.md):
+    the machine-readable first line, the profile heading, and a footer naming the card."""
+    footer = f"*Hermes kanban · {task_id}" + (f" · {sha[:7]}*" if sha else "*")
+    text = f"<!-- hermes-agent: aide -->\n## 🧭 aide · supervisor\n\n{body}\n\n---\n{footer}"
+    return ["gh", "pr", "comment", pr_url, "--body", text]

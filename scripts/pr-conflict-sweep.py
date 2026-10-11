@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Send conflicting operator-ready PRs back to the kanban card that owns them.
+"""Send conflicting parked PRs back to the kanban card that owns them.
 
-A PR the operator has marked ready (not a draft) often sits parked on the human review
-assignee while main moves on, until GitHub reports it CONFLICTING and nobody notices before
-the merge attempt. The card that produced the PR is still the right owner: its implementer
-created the branch and may refresh its base. So each tick, for every open non-draft PR the
-authenticated `gh` user authored in the configured repo:
+A PR often sits parked on the human review assignee while main moves on, until GitHub reports
+it CONFLICTING and nobody notices before the merge attempt. Drafts count: workers open drafts and
+only the operator marks them ready, so most parked PRs are still drafts. The card that produced
+the PR is still the right owner: its implementer created the branch and may refresh its base.
+So each tick, for every open PR the authenticated `gh` user authored in the configured repo:
 
   1. Skip anything not CONFLICTING. UNKNOWN means GitHub has not computed mergeability yet;
      listing the PR asks it to, so the next tick sees the real value.
@@ -16,7 +16,8 @@ authenticated `gh` user authored in the configured repo:
      the conflicting files and the rebase playbook, then `reopen-review` and a reassign to the
      implementer from its last handoff into AI review (`reopen-review` alone restores whoever
      made the latest handoff, which is the AI reviewer once it has parked the card on the
-     human). Other verdicts are reported, never reopened.
+     human), and an Aide comment on the PR saying who has it. Other verdicts are reported,
+     never reopened.
   4. Card already moving (ready, running, todo, or under AI review): leave it alone.
      The implementer rebases before requesting review anyway.
   5. Card human-held (triage, blocked, scheduled), finished, or missing: report it. The
@@ -37,7 +38,7 @@ import subprocess
 import sys
 from typing import Callable
 
-from kanban_pr_owner import HUMAN_HELD, MOVING, implementer_of, owning_card
+from kanban_pr_owner import HUMAN_HELD, MOVING, implementer_of, owning_card, pr_comment_argv
 
 Runner = Callable[[list[str]], "tuple[int, str, str]"]
 
@@ -49,11 +50,10 @@ PLAYBOOK = "docs/agent-playbooks/rebase-regenerate.md"
 def list_conflicting(cmd: Runner, repo: str) -> list[dict]:
     rc, out, err = cmd(["gh", "pr", "list", "--repo", repo, "--author", "@me", "--state", "open",
                         "--limit", "200", "--json",
-                        "number,title,url,headRefName,headRefOid,isDraft,mergeable"])
+                        "number,title,url,headRefName,headRefOid,mergeable"])
     if rc != 0:
         raise RuntimeError(f"gh pr list failed: {err.strip()[-300:]}")
-    return [pr for pr in json.loads(out or "[]")
-            if pr.get("mergeable") == "CONFLICTING" and not pr.get("isDraft")]
+    return [pr for pr in json.loads(out or "[]") if pr.get("mergeable") == "CONFLICTING"]
 
 
 def relevance(cmd: Runner, collector: str, number: int) -> tuple[str, list[str]]:
@@ -120,7 +120,13 @@ def handle(pr: dict, settings: dict, db: Path, cmd: Runner) -> tuple[bool, str]:
     if rc != 0:
         return True, (f"- {label}: reopened {task}, but reassigning it to {implementer} failed: "
                       f"{err.strip()[-200:]}. Reassign it by hand.")
-    return True, f"- {label}: reopened {task} for {implementer} to rebase ({verdict})."
+    files = ", ".join(f"`{path}`" for path in conflicts) or "none listed"
+    rc, _, err = cmd(pr_comment_argv(pr["url"], task, (
+        f"This PR conflicts with `main`. I sent card {task} back to **{implementer}** to rebase "
+        f"onto `main` and push to this branch; the card returns to review when CI is green.\n\n"
+        f"Conflicting files: {files}"), pr["headRefOid"]))
+    note = "" if rc == 0 else f" Commenting on the PR failed: {err.strip()[-200:]}"
+    return True, f"- {label}: reopened {task} for {implementer} to rebase ({verdict}).{note}"
 
 
 def run(settings: dict, db: Path, state_path: Path, cmd: Runner) -> str:
@@ -178,7 +184,7 @@ def main() -> int:
         state.unlink(missing_ok=True)
 
         def cmd(argv: list[str]) -> tuple[int, str, str]:
-            if argv[0] == "hermes":
+            if argv[0] == "hermes" or argv[:3] == ["gh", "pr", "comment"]:
                 print("would run:", " ".join(argv[:6]))
                 return 0, "", ""
             return real(argv)
