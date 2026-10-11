@@ -1,8 +1,8 @@
 diff --git a/cron/scheduler.py b/cron/scheduler.py
-index 6276f94772795..3776a2cd7511f 100644
+index eb2abf1cd0..73f74ae8d2 100644
 --- a/cron/scheduler.py
 +++ b/cron/scheduler.py
-@@ -29,7 +29,7 @@
+@@ -30,7 +30,7 @@ except ImportError:
      except ImportError:
          msvcrt = None
  from pathlib import Path
@@ -11,7 +11,7 @@ index 6276f94772795..3776a2cd7511f 100644
  
  # Must precede repo-level imports: standalone invocations (e.g. module reload after
  # `hermes update`) otherwise fail with ModuleNotFoundError for hermes_time et al.
-@@ -1053,10 +1053,17 @@ def sweep_stale_inflight(due_jobs: Optional[list] = None) -> list:
+@@ -1109,10 +1109,17 @@ def sweep_stale_inflight(due_jobs: Optional[list] = None) -> list:
      return [s[0] for s in stale]
  
  
@@ -31,7 +31,7 @@ index 6276f94772795..3776a2cd7511f 100644
  
      Called by gateway shutdown right after ``process_registry.kill_all()``: a job whose tool was
      killed must never report success. ``only_owners`` (``(job_id, fire_owner)`` pairs) restricts
-@@ -1096,16 +1103,16 @@ def mark_running_jobs_interrupted(
+@@ -1152,16 +1159,16 @@ def mark_running_jobs_interrupted(
                  "Job '%s' interrupted before its durable fire owner was registered; "
                  "leaving persisted state untouched",
                  job_id)
@@ -52,10 +52,10 @@ index 6276f94772795..3776a2cd7511f 100644
              logger.warning("Failed to mark job %s interrupted: %s", job_id, e)
      return marked
 diff --git a/gateway/authz_mixin.py b/gateway/authz_mixin.py
-index 55e615b8e7e9a..2f0e9f4cd5e5f 100644
+index 97fc1c37a2..6d628aa278 100644
 --- a/gateway/authz_mixin.py
 +++ b/gateway/authz_mixin.py
-@@ -251,6 +251,17 @@ def _is_shared_bot_satellite(self, profile_name: str) -> bool:
+@@ -251,6 +251,17 @@ class GatewayAuthorizationMixin:
          except Exception:
              return False
  
@@ -74,10 +74,10 @@ index 55e615b8e7e9a..2f0e9f4cd5e5f 100644
          """The adapter that RECEIVED *source*'s event — the only one whose intake policy (ignored
          channels, relay fronting, re-dispatch of a still-live event) may act on it.
 diff --git a/gateway/run_shutdown.py b/gateway/run_shutdown.py
-index 04f83b100c248..95cc3321e4800 100644
+index 7c04fc4dd1..6466421453 100644
 --- a/gateway/run_shutdown.py
 +++ b/gateway/run_shutdown.py
-@@ -903,8 +903,15 @@ def _notice_allowed(self, platform: Platform, what: str, platform_cfg=None) -> b
+@@ -901,8 +901,15 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
          )
          return False
  
@@ -95,7 +95,7 @@ index 04f83b100c248..95cc3321e4800 100644
  
          The cron worker can't (its thread reaches ``_deliver_result`` after teardown closed the
          transport), so this runs post-interrupt while adapters are still connected. Best-effort.
-@@ -917,57 +924,74 @@ async def _notify_interrupted_cron_jobs(self, job_ids) -> int:
+@@ -915,57 +922,74 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
          same window ``_notify_active_sessions_of_shutdown`` relies on for chat sessions, which is blind to
          cron work because cron runs on the scheduler's own thread pool rather than ``self._running_agents``
          (#60432).
@@ -211,7 +211,7 @@ index 04f83b100c248..95cc3321e4800 100644
  
      async def _shutdown_notification_target(self, session_key: str):
          """``(source, platform_str, chat_id, thread_id, profile)``: persisted origin > cached source >
-@@ -1027,7 +1051,10 @@ async def _notify_active_sessions_of_shutdown(self) -> None:
+@@ -1025,7 +1049,10 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
          Called at the start of stop() while adapters are connected; send failures never block shutdown.
          """
          restart_source = self._restart_command_source if self._restart_requested else None
@@ -223,7 +223,7 @@ index 04f83b100c248..95cc3321e4800 100644
          restart_key = None
          if restart_source is not None:
              with suppress(Exception):
-@@ -1053,7 +1080,7 @@ async def _notify_active_sessions_of_shutdown(self) -> None:
+@@ -1051,7 +1078,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
                      adapter = self._authorization_adapter(platform, profile)
                  if not adapter:
                      continue
@@ -232,7 +232,7 @@ index 04f83b100c248..95cc3321e4800 100644
                      continue
                  reply_to_message_id = getattr(source, "message_id", None)
                  if reply_to_message_id is None and restart_key == dedup_key:
-@@ -1071,13 +1098,14 @@ async def _notify_active_sessions_of_shutdown(self) -> None:
+@@ -1069,13 +1096,14 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
              async def _send_active(adapter=adapter, chat_id=chat_id, platform_str=platform_str,
                                     metadata=metadata, dedup_key=dedup_key):
                  if await self._send_shutdown_notice(
@@ -250,7 +250,7 @@ index 04f83b100c248..95cc3321e4800 100644
              async with scope:
                  presented = await present_notification(_send_active, platform=platform, diagnostic=restart_key != dedup_key)
              if not presented:
-@@ -1120,13 +1148,13 @@ async def _send_active(adapter=adapter, chat_id=chat_id, platform_str=platform_s
+@@ -1118,13 +1146,13 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
                  continue
              async def _send_home(adapter=adapter, home=home, platform=platform, metadata=metadata):
                  if await self._send_shutdown_notice(
@@ -266,7 +266,7 @@ index 04f83b100c248..95cc3321e4800 100644
              async with _async_profile_runtime_scope(profile_home) if profile_home else nullcontext():
                  await present_notification(_send_home, platform=platform)
  
-@@ -1737,7 +1765,7 @@ def _quiet_step(label: str, fn: Callable[[], Any]) -> Any:
+@@ -1758,7 +1786,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
  
      @staticmethod
      def _stop_kill_tool_subprocesses(phase: str) -> list:
@@ -275,7 +275,7 @@ index 04f83b100c248..95cc3321e4800 100644
  
          Called twice: after a drain timeout (reclaim children before systemd SIGKILLs) and as a final
          catch-all. Best-effort; one failing subsystem cannot block the rest.
-@@ -1772,7 +1800,7 @@ def _mark_cron_interrupted() -> list:
+@@ -1793,7 +1821,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
              if _interrupted:
                  logger.warning(
                      "Shutdown (%s): marked %d in-flight cron job(s) interrupted: %s",
@@ -284,7 +284,7 @@ index 04f83b100c248..95cc3321e4800 100644
                  )
              return _interrupted
  
-@@ -1800,7 +1828,7 @@ def _cleanup_browsers() -> None:
+@@ -1821,7 +1849,7 @@ class GatewayShutdownMixin(GatewaySessionEndMixin):
  
      @staticmethod
      async def _stop_kill_tool_subprocesses_off_loop(phase: str) -> list:
@@ -294,10 +294,10 @@ index 04f83b100c248..95cc3321e4800 100644
          ``kill_all`` fans out into per-target ``kill_process`` calls that do blocking work
          (registry checkpoint disk I/O, ``subprocess.run`` for systemd scopes, sandbox exec),
 diff --git a/tests/cron/test_shutdown_interrupt.py b/tests/cron/test_shutdown_interrupt.py
-index b522d72deb232..e85c22654088f 100644
+index cf21a54557..cdcc641d8c 100644
 --- a/tests/cron/test_shutdown_interrupt.py
 +++ b/tests/cron/test_shutdown_interrupt.py
-@@ -83,7 +83,10 @@ def test_marks_every_in_flight_job(self):
+@@ -83,7 +83,10 @@ class TestMarkRunningJobsInterrupted:
          with patch("cron.scheduler.mark_job_run", return_value=True) as mock_mark:
              marked = sched.mark_running_jobs_interrupted("gateway shutdown (final-cleanup)")
  
@@ -309,7 +309,7 @@ index b522d72deb232..e85c22654088f 100644
          assert mock_mark.call_count == 2
          called_ids = {c.args[0] for c in mock_mark.call_args_list}
          assert called_ids == {"job-1", "job-2"}
-@@ -127,7 +130,7 @@ def _side_effect(job_id, success, reason, **kwargs):
+@@ -127,7 +130,7 @@ class TestMarkRunningJobsInterrupted:
          with patch("cron.scheduler.mark_job_run", side_effect=_side_effect):
              marked = sched.mark_running_jobs_interrupted("shutdown")
  
@@ -317,8 +317,8 @@ index b522d72deb232..e85c22654088f 100644
 +        assert marked == [sched.InterruptedCronRun("job-2", profile_home)]
  
      def test_stale_shutdown_cannot_clear_replacement_owner(self, tmp_path):
-         import cron.jobs as jobs
-@@ -211,7 +214,8 @@ def mark(_job_id, _success, _reason, *, expected_fire_owner):
+         from cron import jobs
+@@ -211,7 +214,8 @@ class TestRunningFireOwnerRegistry:
          entered.wait(timeout=2)
  
          assert sched.get_running_job_ids() == frozenset({"same-job"})
@@ -328,7 +328,7 @@ index b522d72deb232..e85c22654088f 100644
          assert set(marked_owners) == {"old-owner", "replacement-owner"}
  
          release.set()
-@@ -245,7 +249,10 @@ def mark(job_id, success, reason, *, expected_fire_owner):
+@@ -245,7 +249,10 @@ class TestRunningFireOwnerRegistry:
  
          monkeypatch.setattr(sched, "mark_job_run", mark)
  
@@ -340,7 +340,7 @@ index b522d72deb232..e85c22654088f 100644
          assert set(observed) == {
              ("same-job", False, "owner-a", profile_a / "cron" / "jobs.json"),
              ("same-job", False, "owner-b", profile_b / "cron" / "jobs.json"),
-@@ -327,7 +334,7 @@ def test_only_owners_marks_only_targeted_executions(self):
+@@ -327,7 +334,7 @@ class TestExecutionScopedInterruption:
                  only_owners={("job-a", "owner-a")},
              )
  
@@ -350,10 +350,10 @@ index b522d72deb232..e85c22654088f 100644
          assert mock_mark.call_args.kwargs["expected_fire_owner"] == "owner-a"
          assert sched._is_interrupted("job-a", token_a) is True
 diff --git a/tests/gateway/test_cron_active_work_drain.py b/tests/gateway/test_cron_active_work_drain.py
-index b5ba46d43d4db..ea35d4701c17c 100644
+index 30f27b6cc5..33ab8dc497 100644
 --- a/tests/gateway/test_cron_active_work_drain.py
 +++ b/tests/gateway/test_cron_active_work_drain.py
-@@ -112,4 +112,5 @@ def _spy(reason):
+@@ -112,4 +112,5 @@ class TestKillToolSubprocessesMarksCronInterrupted:
              await runner.stop()
  
          assert marked_calls, "mark_running_jobs_interrupted was never called during shutdown"
@@ -361,10 +361,10 @@ index b5ba46d43d4db..ea35d4701c17c 100644
 +        home = sched._get_hermes_home().resolve()
 +        assert any(result == [sched.InterruptedCronRun("job-1", home)] for _reason, result in marked_calls)
 diff --git a/tests/gateway/test_cron_interrupt_notification.py b/tests/gateway/test_cron_interrupt_notification.py
-index 3debc5e5042c3..9ad9d3d770b75 100644
+index 3debc5e504..9ad9d3d770 100644
 --- a/tests/gateway/test_cron_interrupt_notification.py
 +++ b/tests/gateway/test_cron_interrupt_notification.py
-@@ -17,8 +17,8 @@
+@@ -17,8 +17,8 @@ from unittest.mock import patch
  
  import pytest
  
@@ -388,7 +388,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
  def _bind_notifier(runner):
      from gateway.run import GatewayRunner
  
-@@ -62,7 +68,7 @@ async def test_owner_is_told_the_run_was_killed(self):
+@@ -62,7 +68,7 @@ class TestNotifyInterruptedCronJobs:
          with patch("cron.jobs.get_job", return_value=job), \
               patch("cron.scheduler._resolve_delivery_targets",
                     return_value=[_telegram_target()]):
@@ -397,7 +397,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
  
          assert sent == 1
          assert len(adapter.sent) == 1
-@@ -84,7 +90,7 @@ async def test_interrupt_notice_is_a_suppressible_diagnostic(self, tmp_path, mon
+@@ -84,7 +90,7 @@ class TestNotifyInterruptedCronJobs:
          with patch("cron.jobs.get_job", return_value=job), \
               patch("cron.scheduler._resolve_delivery_targets",
                     return_value=[_telegram_target()]):
@@ -406,7 +406,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
          expected = 0 if setting is True else 1
          assert sent == expected
          assert len(adapter.sent) == expected
-@@ -100,7 +106,7 @@ async def test_local_only_job_stays_silent(self):
+@@ -100,7 +106,7 @@ class TestNotifyInterruptedCronJobs:
  
          with patch("cron.jobs.get_job", return_value=job), \
               patch("cron.scheduler._resolve_delivery_targets", return_value=[]):
@@ -415,7 +415,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
  
          assert sent == 0
          assert adapter.sent == []
-@@ -115,7 +121,7 @@ async def test_respects_platform_gateway_restart_notification_false(self):
+@@ -115,7 +121,7 @@ class TestNotifyInterruptedCronJobs:
          with patch("cron.jobs.get_job", return_value=job), \
               patch("cron.scheduler._resolve_delivery_targets",
                     return_value=[_telegram_target()]):
@@ -424,7 +424,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
  
          assert sent == 0
          assert adapter.sent == []
-@@ -132,7 +138,7 @@ async def test_failure_deliver_local_suppresses_interrupt_notice(self):
+@@ -132,7 +138,7 @@ class TestNotifyInterruptedCronJobs:
          job = dict(_telegram_job(), failure_deliver="local")
  
          with patch("cron.jobs.get_job", return_value=job):
@@ -433,7 +433,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
  
          assert sent == 0
          assert adapter.sent == []
-@@ -146,7 +152,7 @@ async def test_failure_deliver_unset_notice_reaches_deliver_target(self):
+@@ -146,7 +152,7 @@ class TestNotifyInterruptedCronJobs:
          job = _telegram_job()
  
          with patch("cron.jobs.get_job", return_value=job):
@@ -442,7 +442,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
  
          assert sent == 1
          assert adapter.sent_calls[0][0] == "123456"
-@@ -174,7 +180,7 @@ async def _boom(*_a, **_kw):
+@@ -174,7 +180,7 @@ class TestNotifyInterruptedCronJobs:
          with patch("cron.jobs.get_job", return_value=job), \
               patch("cron.scheduler._resolve_delivery_targets",
                     return_value=[_telegram_target()]):
@@ -451,7 +451,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
  
          assert sent == 0
  
-@@ -187,11 +193,118 @@ async def test_duplicate_targets_send_once_per_job(self):
+@@ -187,11 +193,118 @@ class TestNotifyInterruptedCronJobs:
          with patch("cron.jobs.get_job", return_value=job), \
               patch("cron.scheduler._resolve_delivery_targets",
                     return_value=[_telegram_target(), _telegram_target()]):
@@ -571,7 +571,7 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
  class TestShutdownDeliversNoticeBeforeDisconnect:
      @pytest.mark.asyncio
      async def test_notice_is_sent_while_the_adapter_is_still_connected(self, monkeypatch):
-@@ -200,11 +313,12 @@ async def test_notice_is_sent_while_the_adapter_is_still_connected(self, monkeyp
+@@ -200,11 +313,12 @@ class TestShutdownDeliversNoticeBeforeDisconnect:
          import cron.scheduler as sched
          import tools.process_registry as _pr
          import tools.terminal_tool as _tt
@@ -586,10 +586,10 @@ index 3debc5e5042c3..9ad9d3d770b75 100644
          monkeypatch.setattr(_pr.process_registry, "kill_all", lambda task_id=None: 1)
          monkeypatch.setattr(_tt, "cleanup_all_environments", lambda: None)
 diff --git a/tests/gateway/test_multiplex_notice_egress_profile_adapter.py b/tests/gateway/test_multiplex_notice_egress_profile_adapter.py
-index b0d5987460255..47260c08ec7a8 100644
+index 693c99116a..c95e4f7525 100644
 --- a/tests/gateway/test_multiplex_notice_egress_profile_adapter.py
 +++ b/tests/gateway/test_multiplex_notice_egress_profile_adapter.py
-@@ -19,10 +19,11 @@
+@@ -19,10 +19,11 @@ from gateway.slash_commands import _restart_notify_payload
  
  class _Adapter:
      def __init__(self):
@@ -602,7 +602,7 @@ index b0d5987460255..47260c08ec7a8 100644
          return SimpleNamespace(success=True, message_id="m", error=None)
  
      async def handle_message(self, event):
-@@ -135,3 +136,58 @@ async def test_shutdown_notice_reaches_every_served_profiles_home_channel(monkey
+@@ -149,3 +150,58 @@ async def test_shutdown_notice_reaches_every_served_profiles_home_channel(monkey
      assert r.adapters[Platform.TELEGRAM].sent == ["8776018003"]
      assert r._profile_adapters["sec"][Platform.TELEGRAM].sent == ["8776018003"], "own bot, own conversation"
      assert r._profile_adapters["quiet"][Platform.DISCORD].sent == [], "served profile's opt-out is its own"
@@ -662,10 +662,10 @@ index b0d5987460255..47260c08ec7a8 100644
 +        "q": [],
 +    }
 diff --git a/tests/tools/test_cronjob_run_immediate.py b/tests/tools/test_cronjob_run_immediate.py
-index b3f220a943f92..e8cd3ef0aa657 100644
+index b3f220a943..e8cd3ef0aa 100644
 --- a/tests/tools/test_cronjob_run_immediate.py
 +++ b/tests/tools/test_cronjob_run_immediate.py
-@@ -14,9 +14,10 @@
+@@ -14,9 +14,10 @@ import json
  import sys
  import threading
  import time
@@ -677,7 +677,7 @@ index b3f220a943f92..e8cd3ef0aa657 100644
  from tools.cronjob_tools import cronjob, _execute_job_now
  from tools.environments.base import set_activity_callback
  
-@@ -145,7 +146,9 @@ def test_execute_job_now_delivers_through_owner_profile_adapters(self):
+@@ -145,7 +146,9 @@ class TestCronjobRunExecutesImmediately:
              adapters=default_adapters,
              _gateway_loop=gateway_loop,
              _adapters_for_profile=lambda profile: work_adapters if profile == "work" else default_adapters,
@@ -687,7 +687,7 @@ index b3f220a943f92..e8cd3ef0aa657 100644
          completed = {"id": "job-run-1", "last_status": "ok", "last_error": None}
  
          with patch("tools.cronjob_tools.claim_job_for_fire", return_value={**_JOB, "fire_claim": {"by": "manual-owner"}}), \
-@@ -174,6 +177,7 @@ def test_execute_job_now_grants_a_shared_bot_satellite_only_its_routed_targets(s
+@@ -174,6 +177,7 @@ class TestCronjobRunExecutesImmediately:
              _adapters_for_profile=lambda profile: default_adapters,  # what authz hands a shared-bot satellite
              _is_shared_bot_satellite=lambda profile: profile == "keeper",
          )
@@ -695,7 +695,7 @@ index b3f220a943f92..e8cd3ef0aa657 100644
          route = ProfileRoute(name="ops", platform="telegram", profile="keeper", chat_id="-100")
          completed = {"id": "job-run-1", "last_status": "ok", "last_error": None}
  
-@@ -202,6 +206,7 @@ def boom(profile):
+@@ -202,6 +206,7 @@ class TestCronjobRunExecutesImmediately:
  
          runner = SimpleNamespace(adapters=default_adapters, _gateway_loop=object(),
                                   _adapters_for_profile=boom)
@@ -704,10 +704,10 @@ index b3f220a943f92..e8cd3ef0aa657 100644
          with patch("tools.cronjob_tools.claim_job_for_fire", return_value={**_JOB, "fire_claim": {"by": "manual-owner"}}), \
               patch("gateway.run._gateway_runner_ref", return_value=runner), \
 diff --git a/tools/cronjob_tools.py b/tools/cronjob_tools.py
-index 5bad3d299dbdc..c0e29491e6bfb 100644
+index 625b7d970b..06b62ce9fa 100644
 --- a/tools/cronjob_tools.py
 +++ b/tools/cronjob_tools.py
-@@ -355,18 +355,10 @@ def _run_claimed_job(job: Dict[str, Any], extra_prompt: Optional[str] = None) ->
+@@ -362,18 +362,10 @@ def _run_claimed_job(job: dict[str, Any], extra_prompt: Optional[str] = None) ->
          # HERMES_HOME bound to the owning profile, so resolve that profile's adapters the way the
          # ticker (``tick_adapters_for``) does — fail closed, never the default bot (#124248). A
          # resolution error propagates to the ``except`` below and marks the run failed.

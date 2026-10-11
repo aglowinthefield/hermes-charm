@@ -4,7 +4,7 @@
 Only the explicit companion installer applies this bundle. Native plugin loading does not.
 
 This inventory applies in `ACTIVE` order to a pristine checkout of Hermes revision
-`25a71a744cb9ef06950a91638e6229b4f808d461`. It is revision-specific, not a claim that these
+`f925b01791fe052e7d55dc975750c0bd985aff91`. It is revision-specific, not a claim that these
 patches apply to every release; `hermes charm drift` checks the next one. Recheck upstream status before retiring a fix.
 
 | Artifact | Origin and purpose |
@@ -55,3 +55,24 @@ before `hermes update` does, not after:
 
 Use `hermes charm check` for a read-only current preflight. See [SAFETY.md](SAFETY.md)
 for explicit application, rollback, failure handling and adoption requirements.
+
+## Explicit local PR checks
+
+For private repositories where GitHub's branch-rules endpoint returns a plan-related
+403, the board owner's active `config.yaml` can declare minimum required checks:
+
+```yaml
+kanban:
+  required_pr_checks:
+    aglowinthefield/oto:
+      - context: verify
+        app_id: 15368
+```
+
+`app_id` identifies the GitHub App that publishes the check (15368 is GitHub Actions).
+These checks are added to any requirements GitHub supplies, never substituted for
+them. Only a rules-endpoint 403 can use the explicit local gate; all other API/auth
+failures still refuse completion. The latest check for that app must succeed on the
+exact PR head, and the PR head/base are rechecked before completion. Missing, skipped,
+failed, stale, or wrong-app checks cannot pass. The merged-review reconciler still
+requires a PR completion contract and a matching durable review handoff.

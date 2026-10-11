@@ -56,7 +56,7 @@ def get(section: str, key: str) -> Any:
         valid = isinstance(value, str) and bool(value.strip())
     if not valid:
         raise ConfigurationError(f"Deployment config {path} has invalid {section}.{key}")
-    if key == 'home' and isinstance(value, str):
+    if key in {'home', 'collector'} and isinstance(value, str):
         return str(Path(value).expanduser().resolve())
     return value
 
