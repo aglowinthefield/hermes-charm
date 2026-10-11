@@ -29,6 +29,7 @@ def render(data):
                 'provides_tools: []', 'capabilities: []', 'config_schema:']
     docs = [START, '## Customizations', '',
             f"Upstream status checked at `{data['upstream_checked_at']}`. This is a snapshot, not a live query.", '',
+            '🟢 Merged · 🟠 Open · 🔴 Closed without merge', '',
             'Each row is one independent toggle. All ship enabled by default to preserve the existing active set.',
             'A merge is a reason to review retirement, not permission to silently remove a patch.', '']
     for row in rows:
@@ -48,8 +49,8 @@ def render(data):
         for row in rows:
             if row['maintenance'] != kind:
                 continue
-            sources = '; '.join(source['reference'] + ' (' +
-                                ('closed without merge' if source['state'] == 'closed' else source['state']) + ')'
+            sources = '; '.join({'merged': '🟢', 'open': '🟠', 'closed': '🔴'}[source['state']]
+                                + ' ' + source['reference']
                                 for source in row['sources'])
             maintenance = (sources + '. ' if sources else '') + row['note']
             docs.append(f"| `{row['id']}` | {row['summary']} | {maintenance} |")
