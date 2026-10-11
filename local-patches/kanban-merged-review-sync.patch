@@ -1,5 +1,5 @@
 diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
-index e954eabda3..122da7576c 100644
+index 20f264065f..1ca645b880 100644
 --- a/hermes_cli/kanban_db.py
 +++ b/hermes_cli/kanban_db.py
 @@ -2776,6 +2776,20 @@ def complete_task(
@@ -34,7 +34,7 @@ index e954eabda3..122da7576c 100644
          return False
      with write_txn(conn):
 diff --git a/hermes_cli/kanban_db_dispatch.py b/hermes_cli/kanban_db_dispatch.py
-index 5f13b407fa..4b00a0358b 100644
+index bbd24a67a5..cecc128ebb 100644
 --- a/hermes_cli/kanban_db_dispatch.py
 +++ b/hermes_cli/kanban_db_dispatch.py
 @@ -398,6 +398,10 @@ class DispatchResult:
@@ -47,7 +47,7 @@ index 5f13b407fa..4b00a0358b 100644
 +    """Read-only diagnostics: task ID, PR URL, classification."""
  
  
- def describe_suppression(results: Iterable[Optional["DispatchResult"]]) -> str:
+ def describe_suppression(results: Iterable[Optional[DispatchResult]]) -> str:
 @@ -2246,19 +2250,25 @@ def dispatch_once(
          )
  
@@ -76,7 +76,7 @@ index 5f13b407fa..4b00a0358b 100644
      # section: a slow subscriber must never stall a sibling dispatcher's tick.
      _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
 diff --git a/hermes_cli/kanban_pr_acceptance.py b/hermes_cli/kanban_pr_acceptance.py
-index 81e0046a40..a812901c46 100644
+index cf8f6a6b0b..c242d6ed52 100644
 --- a/hermes_cli/kanban_pr_acceptance.py
 +++ b/hermes_cli/kanban_pr_acceptance.py
 @@ -115,7 +115,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
@@ -88,7 +88,7 @@ index 81e0046a40..a812901c46 100644
              receipt["detail"] = "Supply metadata.published_pr matching the persisted completion contract."
              return receipt
          repo, number = match[1], int(match[2])
-@@ -129,6 +129,10 @@ def collect_acceptance(contract: str, published_pr: str | None,
+@@ -127,6 +127,10 @@ def collect_acceptance(contract: str, published_pr: str | None,
              # A private repo the login cannot read resolves to null, not an error.
              raise _GateAuthError(f"HTTP 404 on graphql {repo}")
          pr = repository["pullRequest"]
@@ -99,7 +99,7 @@ index 81e0046a40..a812901c46 100644
          sha, branch = pr["headRefOid"], pr["baseRefName"]
          receipt["head_sha"] = sha
          if not re.fullmatch(r"[0-9a-f]{40}", sha) or pr["state"] not in {"OPEN", "MERGED"}:
-@@ -186,6 +190,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
+@@ -184,6 +188,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
          if current["head"]["sha"] != sha or current["base"]["ref"] != branch or (current["state"] == "closed" and not current.get("merged")):
              receipt.update(classification="stale", detail="PR head/base changed while collecting evidence; retry.")
              return receipt

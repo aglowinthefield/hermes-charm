@@ -4,7 +4,7 @@
 Only the explicit companion installer applies this bundle. Native plugin loading does not.
 
 This inventory applies in `ACTIVE` order to a pristine checkout of Hermes revision
-`25a71a744cb9ef06950a91638e6229b4f808d461`. It is revision-specific, not a claim that these
+`f925b01791fe052e7d55dc975750c0bd985aff91`. It is revision-specific, not a claim that these
 patches apply to every release; `hermes charm drift` checks the next one. Recheck upstream status before retiring a fix.
 
 | Artifact | Origin and purpose |
