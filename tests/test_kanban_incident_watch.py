@@ -6,10 +6,12 @@ import importlib.util
 import json
 from pathlib import Path
 import sqlite3
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("kanban_incident_watch", ROOT / "scripts" / "kanban-incident-watch.py")
 watch = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(watch)
@@ -45,9 +47,13 @@ class FakeHermes:
 
     def __init__(self, fail=()):
         self.writes: list[list[str]] = []
+        self.pr_comments: list[list[str]] = []
         self.fail = set(fail)
 
     def __call__(self, argv):
+        if argv[:3] == ["gh", "pr", "comment"]:
+            self.pr_comments.append(argv)
+            return 0, "", ""
         self.writes.append(argv)
         sub = argv[4]
         if sub in self.fail:
@@ -79,6 +85,7 @@ class IncidentWatchTests(unittest.TestCase):
             conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, assignee TEXT, status TEXT)")
             conn.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, kind TEXT,"
                          " payload TEXT, created_at INTEGER)")
+            conn.execute("CREATE TABLE task_runs (id INTEGER PRIMARY KEY, task_id TEXT, metadata TEXT)")
             conn.commit()
         self.calls: list[dict] = []
         FakeHermes.db = self.db
@@ -89,6 +96,12 @@ class IncidentWatchTests(unittest.TestCase):
             conn.execute("INSERT OR REPLACE INTO tasks VALUES (?, ?, 'scribe', ?)", (task_id, f"SIL: {task_id}", status))
             conn.execute("INSERT INTO task_events (task_id, kind, payload, created_at) VALUES (?, ?, ?, ?)",
                          (task_id, kind, json.dumps(payload), at))
+            conn.commit()
+
+    def published(self, task_id, url):
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute("INSERT INTO task_runs (task_id, metadata) VALUES (?, ?)",
+                         (task_id, json.dumps({"published_pr": url})))
             conn.commit()
 
     def set_status(self, task_id, status):
@@ -121,6 +134,20 @@ class IncidentWatchTests(unittest.TestCase):
         self.assertEqual([("link", incident, "t_d"), ("unblock", "t_d", "--reason")], later.ops())
         self.assertEqual([], [argv for argv in later.writes if argv[4] == "create"])
         self.assertIn("t_d", report)
+
+    def test_holding_a_card_with_a_pr_comments_on_that_pr_once(self):
+        for task in ("t_a", "t_b", "t_c"):
+            self.blocked(task, "billing")
+        self.published("t_b", "https://github.com/example/repo/pull/7")
+        hermes = FakeHermes()
+        self.tick(hermes)
+        [posted] = hermes.pr_comments
+        self.assertEqual("https://github.com/example/repo/pull/7", posted[3])
+        self.assertTrue(posted[-1].startswith("<!-- hermes-agent: aide -->"))
+        self.assertIn("behind incident card t_inc1", posted[-1])
+        again = FakeHermes()
+        self.tick(again)
+        self.assertEqual([], again.pr_comments)
 
     def test_two_cards_are_not_an_incident_and_quiet_ticks_cost_no_jev_calls(self):
         self.blocked("t_a", "billing")

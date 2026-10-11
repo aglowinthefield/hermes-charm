@@ -54,9 +54,13 @@ class Fake:
         self.entries = entries or {}
         self.trunk_error = trunk_error
         self.writes: list[list[str]] = []
+        self.pr_comments: list[list[str]] = []
         self.trunk_calls: list[int] = []
 
     def cmd(self, argv):
+        if argv[:3] == ["gh", "pr", "comment"]:
+            self.pr_comments.append(argv)
+            return 0, "", ""
         if argv[:2] == ["gh", "api"]:
             return 0, self.pushed_at + "\n", ""
         if argv[0] == "gh":
@@ -118,10 +122,16 @@ class TrunkQueueSweepTests(unittest.TestCase):
         self.assertIn("`build` (TIMED_OUT)", comment)
         self.assertNotIn("/pull/", comment)  # a PR URL in a card comment holds respawns
         self.assertIn("t_one", report)
+        [posted] = fake.pr_comments
+        self.assertEqual(pr(7, "b1")["url"], posted[3])
+        self.assertTrue(posted[-1].startswith("<!-- hermes-agent: aide -->"))
+        self.assertIn("failing required checks (`test`, `build`)", posted[-1])
+        self.assertIn("**builder**", posted[-1])
 
         again = Fake([pr(7, "b1")], {7: failed()})
         self.assertEqual("", self.tick(again))
         self.assertEqual([], again.writes)
+        self.assertEqual([], again.pr_comments)
 
         resubmitted = Fake([pr(7, "b1")], {7: failed(entry="e2")})
         self.tick(resubmitted)

@@ -38,6 +38,8 @@ from typing import Callable
 import urllib.error
 import urllib.request
 
+from kanban_pr_owner import pr_comment_argv, published_pr
+
 WINDOW_SECONDS = 24 * 60 * 60
 MIN_CARDS = 3
 SYSTEMIC_AT = 0.6  # calibrated 2026-10-11 on 49 silk block reasons; see the Charm commit
@@ -233,6 +235,14 @@ def check_board(db: Path, entry: dict, now: float, ask: Ask, cmd: Runner, park: 
                 continue
             incident["held"].append(task)
             lines.append(f"- {incident['card']}: held {task} ({blocked[task]['title']})")
+            pr_url = published_pr(db, task)
+            if pr_url:
+                rc, _, err = cmd(pr_comment_argv(pr_url, task, (
+                    f"Card {task} is blocked by the same cause as {len(incident['members']) - 1} other "
+                    f"cards, so I moved it to `todo` behind incident card {incident['card']} to stop it "
+                    f"retrying. It returns to `ready` when the operator completes that card.")))
+                if rc != 0:
+                    lines.append(f"- {incident['card']}: commenting on {pr_url} failed: {err.strip()[-200:]}")
     if lines:
         lines.insert(0, f"Kanban board `{board}`:")
     return lines
