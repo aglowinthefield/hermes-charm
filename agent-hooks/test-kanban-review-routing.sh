@@ -69,6 +69,9 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
       case "$3" in
         */4|*/5|*/6|*/11) echo '{"state":"OPEN","isDraft":true,"headRefOid":"4444444444444444444444444444444444444444"}' ;;
         */10) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444"}' ;;
+        */o/auto/pull/12|*/o/auto/pull/15|*/o/held/pull/16) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444","changedFiles":2,"files":[{"path":"src/a.ts"},{"path":"drizzle.config.ts"}]}' ;;
+        */o/auto/pull/13) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444","changedFiles":2,"files":[{"path":"src/a.ts"},{"path":"drizzle/0001.sql"}]}' ;;
+        */o/auto/pull/14) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444","changedFiles":101,"files":[{"path":"src/a.ts"}]}' ;;
         */7) echo '{"state":"CLOSED","headRefOid":"7777777777777777777777777777777777777777"}' ;;
         *) exit 1 ;;
       esac
@@ -76,13 +79,17 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
   esac
 elif [ "$1" = pr ] && [ "$2" = checks ]; then
   case "$3" in
-    */4|*/10|*/11) echo '[{"name":"test","state":"SUCCESS","bucket":"pass","workflow":"CI","link":"https://ci/4"}]' ;;
+    */4|*/10|*/11|*/1[2-6]) echo '[{"name":"test","state":"SUCCESS","bucket":"pass","workflow":"CI","link":"https://ci/4"}]' ;;
     */5) echo '[{"name":"test","state":"PENDING","bucket":"pending","workflow":"CI","link":"https://ci/5"}]' ;;
     */6) echo '[]' ;;
     *) exit 1 ;;
   esac
 elif [ "$1" = pr ] && [ "$2" = ready ]; then
   case "$3" in */11) exit 1 ;; esac
+elif [ "$1" = pr ] && [ "$2" = merge ]; then
+  case "$3" in */15) echo 'auto-merge is not allowed for this repository' >&2; exit 1 ;; esac
+elif [ "$1" = pr ] && [ "$2" = comment ]; then
+  :
 else
   exit 99
 fi
@@ -107,6 +114,9 @@ m block jester https://github.com/o/r/pull/9
 m block jester "not-a-url/pull/1"
 m block jester ""
 
+POLICY=$(dirname "$DB")/automerge.json
+echo '{"o/auto":{"method":"squash","hold_paths":["drizzle/","fly.toml"]},"o/held":{"method":"fast-forward","hold_paths":[]}}' > "$POLICY"
+export KANBAN_AUTOMERGE_POLICY="$POLICY"
 h() { # $1 expect $2 published_pr
   out=$(jq -n --arg pr "$2" \
     '{tool_name:"kanban_request_review",profile:"jester",tool_input:{task_id:"t_rev",reviewer:"tom",metadata:{published_pr:$pr}}}' \
@@ -141,11 +151,31 @@ if grep -q 'pr ready https://github.com/o/r/pull/10' "$GH_LOG"; then
 else
   printf 'ok    already-ready PR left alone\n'
 fi
-if grep -Eq ' api |pr merge|--undo' "$GH_LOG"; then
+if grep -E ' api |pr merge|pr comment|--undo' "$GH_LOG" | grep -vq '/o/'; then
   printf 'FAIL  review gate made an unexpected GitHub write\n'; fail=1
 else
-  printf 'ok    only write is pr ready\n'
+  printf 'ok    repos without a policy only get pr ready\n'
 fi
+
+# Auto-merge: only repos in the operator's policy file, only when no held path changed and the
+# file list is complete, always pinned to the reviewed head. Doubt leaves the PR for the operator.
+lg() { if grep -qxF -- "$2" "$GH_LOG"; then printf 'ok    %s\n' "$1"; else printf 'FAIL  %s: missing %s\n' "$1" "$2"; fail=1; fi; }
+nolg() { if grep -qF -- "$2" "$GH_LOG"; then printf 'FAIL  %s: found %s\n' "$1" "$2"; fail=1; else printf 'ok    %s\n' "$1"; fi; }
+h allow https://github.com/o/auto/pull/12
+lg "policy repo merges with its method at the reviewed head" "pr merge https://github.com/o/auto/pull/12 --auto --squash --match-head-commit 4444444444444444444444444444444444444444"
+h allow https://github.com/o/auto/pull/13
+nolg "held path leaves the PR for the operator" "pr merge https://github.com/o/auto/pull/13"
+lg "held path is explained on the PR" "pr comment https://github.com/o/auto/pull/13 --body Auto-merge held for the operator: changes drizzle/0001.sql."
+h allow https://github.com/o/auto/pull/14
+nolg "truncated file list never merges" "pr merge https://github.com/o/auto/pull/14"
+h allow https://github.com/o/auto/pull/15
+lg "failed merge is explained on the PR" "pr comment https://github.com/o/auto/pull/15 --body Auto-merge was not enabled, so the operator merges this PR: auto-merge is not allowed for this repository"
+h block https://github.com/o/held/pull/16
+nolg "unknown merge method refuses before any write" "pr merge https://github.com/o/held/pull/16"
+echo '{not json' > "$POLICY"
+h block https://github.com/o/auto/pull/12
+rm "$POLICY"
+h allow https://github.com/o/r/pull/4
 
 rm -rf "$(dirname "$DB")"
 exit $fail
