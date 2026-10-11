@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Send conflicting operator-ready PRs back to the kanban card that owns them.
+"""Send conflicting parked PRs back to the kanban card that owns them.
 
-A PR the operator has marked ready (not a draft) often sits parked on the human review
-assignee while main moves on, until GitHub reports it CONFLICTING and nobody notices before
-the merge attempt. The card that produced the PR is still the right owner: its implementer
-created the branch and may refresh its base. So each tick, for every open non-draft PR the
-authenticated `gh` user authored in the configured repo:
+A PR often sits parked on the human review assignee while main moves on, until GitHub reports
+it CONFLICTING and nobody notices before the merge attempt. Drafts count: workers open drafts and
+only the operator marks them ready, so most parked PRs are still drafts. The card that produced
+the PR is still the right owner: its implementer created the branch and may refresh its base.
+So each tick, for every open PR the authenticated `gh` user authored in the configured repo:
 
   1. Skip anything not CONFLICTING. UNKNOWN means GitHub has not computed mergeability yet;
      listing the PR asks it to, so the next tick sees the real value.
@@ -49,11 +49,10 @@ PLAYBOOK = "docs/agent-playbooks/rebase-regenerate.md"
 def list_conflicting(cmd: Runner, repo: str) -> list[dict]:
     rc, out, err = cmd(["gh", "pr", "list", "--repo", repo, "--author", "@me", "--state", "open",
                         "--limit", "200", "--json",
-                        "number,title,url,headRefName,headRefOid,isDraft,mergeable"])
+                        "number,title,url,headRefName,headRefOid,mergeable"])
     if rc != 0:
         raise RuntimeError(f"gh pr list failed: {err.strip()[-300:]}")
-    return [pr for pr in json.loads(out or "[]")
-            if pr.get("mergeable") == "CONFLICTING" and not pr.get("isDraft")]
+    return [pr for pr in json.loads(out or "[]") if pr.get("mergeable") == "CONFLICTING"]
 
 
 def relevance(cmd: Runner, collector: str, number: int) -> tuple[str, list[str]]:
