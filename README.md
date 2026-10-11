@@ -3,13 +3,15 @@
 <p align="center">Customizations you carry between Hermes versions.</p>
 
 Charm is a private, independently installable native Hermes plugin. It bundles its
-maintenance implementation, tests and a separate SHA-256-pinned core patch set.
+maintenance implementation, tests and a separate core patch set.
 It does not depend on scripts copied into your Hermes home.
 
 <!-- charm:catalog:start -->
 ## Customizations
 
-Upstream status checked at `2026-10-05T02:52:11Z`. This is a snapshot, not a live query.
+Upstream status checked at `2026-10-11T05:58:38Z`. This is a snapshot, not a live query.
+
+🟢 Merged · 🟠 Open · 🔴 Closed without merge
 
 Each row is one independent toggle. All ship enabled by default to preserve the existing active set.
 A merge is a reason to review retirement, not permission to silently remove a patch.
@@ -24,22 +26,22 @@ A merge is a reason to review retirement, not permission to silently remove a pa
 
 | Toggle | What it changes | Upstream / maintenance |
 | --- | --- | --- |
-| `dashboard-dispatch-caps` | Respect configured total/per-profile in-progress caps, failure limits and default assignee when nudging dashboard dispatch. | [NousResearch/hermes-agent#120651](https://github.com/NousResearch/hermes-agent/pull/120651) (open). Partial port. It does not implement the shared resolver or the upstream proposal's configured max_spawn default. |
-| `project-skills-worktree-trust` | Let registered linked worktrees inherit canonical-repository skill trust after Git metadata validation. | [NousResearch/hermes-agent#116040](https://github.com/NousResearch/hermes-agent/pull/116040) (open). Local validation changes differ from the current proposal; review additional upstream trust corrections before retirement. |
-| `multiplex-notice-profile-scope` | Use the owning profile's preferences, language, cron store and delivery adapters for shutdown and interrupted-cron notices. | [NousResearch/hermes-agent#128952](https://github.com/NousResearch/hermes-agent/pull/128952) (open). Local port does not include every module extraction or later correction in the current proposal. |
-| `idle-compact-watchdog-79357` | Preserve pre-watchdog activity time so the idle-compaction check sees the actual idle gap. | [NousResearch/hermes-agent#79456](https://github.com/NousResearch/hermes-agent/pull/79456) (open). Hand-port adapted to the extracted compaction module. |
-| `kanban-skill-pin-tolerance` | Drop unavailable assignee skill pins at creation and worker launch, recording creation-time drops and warning at launch. | [NousResearch/hermes-agent#89601](https://github.com/NousResearch/hermes-agent/pull/89601) (open). One owner for this behavior: duplicated skill-filter hunks were removed from the token-hygiene artifact. |
-| `kanban-branch-name-punctuation` | Strip boundary periods/hyphens, including after truncation, while retaining internal version-number periods. | [NousResearch/hermes-agent#130500](https://github.com/NousResearch/hermes-agent/pull/130500) (open). Backport; retain until the upstream behavior is verified. |
-| `kanban-rate-limit-backoff` | Hold a card 5m, 15m, 45m, then 2h after consecutive rate-limited runs instead of respawning every 5 minutes forever; relay-pool health gate and board-wide circuit stay inert for non-pool providers. | [NousResearch/hermes-agent#119994](https://github.com/NousResearch/hermes-agent/pull/119994) (open). Whole-PR adoption. 2026-10-02 storm: 1,329 rate-limited respawns across 18 cards in 13 hours. |
-| `kanban-superseded-check-runs` | Judge each required check by its newest run per app. A cancelled run from a superseded workflow suite on the same head no longer rejects completion of a green or merged PR. | [NousResearch/hermes-agent#122701](https://github.com/NousResearch/hermes-agent/pull/122701) (closed without merge). Whole-PR adoption; fixes issue NousResearch/hermes-agent#122688. The author closed the PR unmerged after a bot review confirmed the fix. kanban-merged-review-sync is cut on top of this artifact. |
-| `kanban-merged-review-sync` | Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads. | [NousResearch/hermes-agent#117500](https://github.com/NousResearch/hermes-agent/pull/117500) (open). Re-adapted on top of kanban-superseded-check-runs (its collect_acceptance hunk dropped) and now ships the reconciler module and its tests from the PR. Recheck handoff identity before completion; never bypass acceptance gates. |
-| `kanban-worktree-teardown` | Clean completed, clean, fully pushed worktrees without waiting on children using independent workspaces; retain shared/scratch workspaces while needed. | [NousResearch/hermes-agent#123017](https://github.com/NousResearch/hermes-agent/pull/123017) (open). Hand-ported onto upstream's terminal-parent sweep guard; retain until upstream behavior and regression tests are verified. |
+| `dashboard-dispatch-caps` | Respect configured total/per-profile in-progress caps, failure limits and default assignee when nudging dashboard dispatch. | 🟠 [NousResearch/hermes-agent#120651](https://github.com/NousResearch/hermes-agent/pull/120651). Partial port. It does not implement the shared resolver or the upstream proposal's configured max_spawn default. |
+| `project-skills-worktree-trust` | Let registered linked worktrees inherit canonical-repository skill trust after Git metadata validation. | 🟠 [NousResearch/hermes-agent#116040](https://github.com/NousResearch/hermes-agent/pull/116040). Local validation changes differ from the current proposal; review additional upstream trust corrections before retirement. |
+| `multiplex-notice-profile-scope` | Use the owning profile's preferences, language, cron store and delivery adapters for shutdown and interrupted-cron notices. | 🟠 [NousResearch/hermes-agent#128952](https://github.com/NousResearch/hermes-agent/pull/128952). Local port does not include every module extraction or later correction in the current proposal. |
+| `idle-compact-watchdog-79357` | Preserve pre-watchdog activity time so the idle-compaction check sees the actual idle gap. | 🟠 [NousResearch/hermes-agent#79456](https://github.com/NousResearch/hermes-agent/pull/79456). Hand-port adapted to the extracted compaction module. |
+| `kanban-skill-pin-tolerance` | Drop unavailable assignee skill pins at creation and worker launch, recording creation-time drops and warning at launch. | 🟠 [NousResearch/hermes-agent#89601](https://github.com/NousResearch/hermes-agent/pull/89601). One owner for this behavior: duplicated skill-filter hunks were removed from the token-hygiene artifact. |
+| `kanban-branch-name-punctuation` | Strip boundary periods/hyphens, including after truncation, while retaining internal version-number periods. | 🟠 [NousResearch/hermes-agent#130500](https://github.com/NousResearch/hermes-agent/pull/130500). Backport; retain until the upstream behavior is verified. |
+| `kanban-rate-limit-backoff` | Hold a card 5m, 15m, 45m, then 2h after consecutive rate-limited runs instead of respawning every 5 minutes forever; relay-pool health gate and board-wide circuit stay inert for non-pool providers. | 🟠 [NousResearch/hermes-agent#119994](https://github.com/NousResearch/hermes-agent/pull/119994). Whole-PR adoption. 2026-10-02 storm: 1,329 rate-limited respawns across 18 cards in 13 hours. |
+| `kanban-superseded-check-runs` | Judge each required check by its newest run per app. A cancelled run from a superseded workflow suite on the same head no longer rejects completion of a green or merged PR. | 🔴 [NousResearch/hermes-agent#122701](https://github.com/NousResearch/hermes-agent/pull/122701). Whole-PR adoption; fixes issue NousResearch/hermes-agent#122688. The author closed the PR unmerged after a bot review confirmed the fix. kanban-merged-review-sync is cut on top of this artifact. |
+| `kanban-merged-review-sync` | Reuse persisted PR evidence, prefer the latest execution of each required GitHub check, and reconcile unclaimed merged reviews without holding board locks across GitHub reads. | 🟠 [NousResearch/hermes-agent#117500](https://github.com/NousResearch/hermes-agent/pull/117500). Re-adapted on top of kanban-superseded-check-runs (its collect_acceptance hunk dropped) and now ships the reconciler module and its tests from the PR. Recheck handoff identity before completion; never bypass acceptance gates. |
+| `kanban-worktree-teardown` | Clean completed, clean, fully pushed worktrees without waiting on children using independent workspaces; retain shared/scratch workspaces while needed. | 🟠 [NousResearch/hermes-agent#123017](https://github.com/NousResearch/hermes-agent/pull/123017). Hand-ported onto upstream's terminal-parent sweep guard; retain until upstream behavior and regression tests are verified. |
 
 ### Mixed upstream fixes and homebrew policy
 
 | Toggle | What it changes | Upstream / maintenance |
 | --- | --- | --- |
-| `kanban-token-hygiene` | Deliver parent attachments and archived-parent handoffs; reduce duplicated output/history; add compact/minimal views, hard-blocker escalation and local read/card-budget guidance. | [NousResearch/hermes-agent#120542](https://github.com/NousResearch/hermes-agent/pull/120542) (open); [NousResearch/hermes-agent#120543](https://github.com/NousResearch/hermes-agent/pull/120543) (open); [NousResearch/hermes-agent#116561](https://github.com/NousResearch/hermes-agent/pull/116561) (open); [NousResearch/hermes-agent#125333](https://github.com/NousResearch/hermes-agent/pull/125333) (open); [NousResearch/hermes-agent#118790](https://github.com/NousResearch/hermes-agent/pull/118790) (open). Atomic toggle for overlapping changes. Local prompt/card-budget policy has no planned upstream submission; the linked fixes await merges. Default/full output is also trimmed. |
+| `kanban-token-hygiene` | Deliver parent attachments and archived-parent handoffs; reduce duplicated output/history; add compact/minimal views, hard-blocker escalation and local read/card-budget guidance. | 🟠 [NousResearch/hermes-agent#120542](https://github.com/NousResearch/hermes-agent/pull/120542); 🟠 [NousResearch/hermes-agent#120543](https://github.com/NousResearch/hermes-agent/pull/120543); 🟠 [NousResearch/hermes-agent#116561](https://github.com/NousResearch/hermes-agent/pull/116561); 🟠 [NousResearch/hermes-agent#125333](https://github.com/NousResearch/hermes-agent/pull/125333); 🟠 [NousResearch/hermes-agent#118790](https://github.com/NousResearch/hermes-agent/pull/118790). Atomic toggle for overlapping changes. Local prompt/card-budget policy has no planned upstream submission; the linked fixes await merges. Default/full output is also trimmed. |
 
 ### Upstream successor merged, retirement needs verification
 
@@ -54,18 +56,24 @@ Skill-pin tolerance has its own toggle; it is no longer duplicated inside token 
 
 ## Install
 
-Use an exact, tested commit SHA. The private repository requires SSH access.
+Install from `main`. The private repository requires SSH access.
 
 ```sh
-hermes plugins install git@github.com:aglowinthefield/hermes-charm.git --ref FULL_COMMIT_SHA --no-enable --yes-deps
+hermes plugins install git@github.com:aglowinthefield/hermes-charm.git --no-enable --yes-deps
 hermes plugins doctor charm --ci
 hermes plugins enable charm
 hermes charm check
 ```
 
-Native installation records the repository and commit in Hermes's provenance tracking.
-A pinned install stays pinned. Upgrade deliberately by reinstalling at a newer tested
-SHA with `--force`; do not edit the installed checkout or invent a self-updater.
+Native installation records the repository and current commit in Hermes's provenance tracking.
+Update from `main`, then check the patch bundle before applying pending changes:
+
+```sh
+hermes plugins update charm
+hermes charm check
+```
+
+Updates are explicit; installing Charm does not schedule them.
 
 ## What ships
 
@@ -74,7 +82,7 @@ SHA with `--force`; do not edit the installed checkout or invent a self-updater.
 | `plugin.yaml`, `__init__.py`, `charm.py` | Native catalog, profile settings and explicit check/apply commands. |
 | `customizations.json` | Descriptions, defaults, maintenance intent and verified upstream status. |
 | `local_patches.py` | Preflight the complete ordered patch set, preserve backups and install checked bytes. |
-| `local-patches/` | Explicit core patches, application order, SHA-256 pins and provenance. |
+| `local-patches/` | Explicit core patches, application order, integrity checks and provenance. |
 | `scripts/charm-prestart.sh` | Require a loaded Charm command and successful Plugin Doctor before applying the bundle. |
 | `tests/`, `scripts/runtime_smoke.py` | Real-Git safety tests and native CLI behavior in isolated homes. |
 
@@ -156,15 +164,14 @@ and upstream `main`, on pushes and daily. Native integration tests exercise read
 checks, persisted toggles, explicit application/removal and disabled-plugin refusal in clean homes.
 These CI lanes test native compatibility using isolated fixture patches.
 
-The extracted full bundle currently preflights on the maintained local checkout,
-but fails on an unmodified checkout at the same Hermes SHA. The skill-pin artifact
-depends on local context in `hermes_cli/kanban_db.py` and its regression-test file.
-Do not apply this bundle to a fresh upstream install until it has been rebased and
-its behavior tests rerun. The installer refuses that mismatch rather than forcing it.
+The core bundle was rebased and tested on Hermes `f925b017`, and CI also rehearses
+application and behavior tests against upstream `main`. Patch compatibility depends
+on the target checkout; run `hermes charm check` before applying after an update.
+The installer refuses mismatches rather than forcing them.
 
 A green native plugin test does not prove every core patch applies to every future
-Hermes revision. Local preflight remains mandatory after each update. Keep a known-good
-plugin SHA and review failures before updating pins or retiring patches.
+Hermes revision. Local preflight remains mandatory after each update. Review failures
+before changing patch artifacts or retiring customizations.
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -194,7 +201,7 @@ No automatic backend restarts, network telemetry or unreviewed plugin updates oc
 | Worktree maintenance | `scripts/kanban-worktree-sweep.py` | Home schedule and active runtime paths |
 | Conflicting-PR rework routing | `scripts/pr-conflict-sweep.py` | Required deployment JSON; reopens only cards parked on the human review assignee |
 
-The eleven native `charm enable/disable` settings above control core patch selection.
+The twelve native `charm enable/disable` settings above control core patch selection.
 Shell policies and scheduled integrations are separately selected by home hook and
 cron registrations. They are not silently enabled by those core settings or by plugin
 registration. Blocking policies keep their fail-closed shell adapter rather than
