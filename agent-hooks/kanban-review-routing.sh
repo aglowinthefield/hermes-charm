@@ -2,7 +2,8 @@
 # Consolidated review gate: every review goes implementer -> reviewer -> operator, and an operator
 # handoff is allowed only when its exact PR head has passing CI. That allowed handoff then marks a
 # draft PR ready for review on the operator's behalf: the operator chose this gate as the moment
-# the PR reaches them. No agent marks a PR ready by its own call, and nothing here merges.
+# the PR reaches them. No agent marks a PR ready or merges by its own call. A repo listed in the
+# operator's auto-merge policy (KANBAN_AUTOMERGE_POLICY) also gets GitHub auto-merge here.
 #
 # kanban_request_review: a reviewer is required. Other workers must name the reviewer profile.
 # Only the reviewer, and only from a review run, may park a card on the operator.
@@ -115,7 +116,7 @@ fi
 printf '%s' "$PR" | grep -Eq '^https://github\.com/[^/]+/[^/]+/pull/[0-9]+/?$' || \
   block "Human-review handoff blocked: metadata.published_pr must be an exact GitHub pull-request URL."
 
-PR_JSON=$($GH pr view "$PR" --json state,isDraft,headRefOid 2>/dev/null) || \
+PR_JSON=$($GH pr view "$PR" --json state,isDraft,headRefOid,changedFiles,files 2>/dev/null) || \
   block "Human-review handoff blocked: could not read $PR with gh. Verify authentication and PR URL, then retry."
 STATE=$(printf '%s' "$PR_JSON" | jq -r '.state // ""')
 HEAD=$(printf '%s' "$PR_JSON" | jq -r '.headRefOid // ""')
@@ -131,8 +132,39 @@ NOT_PASSING=$(printf '%s' "$CHECKS" | jq -r '[.[] | select(.bucket != "pass" and
 [ -z "$NOT_PASSING" ] || \
   block "Human-review handoff blocked: CI is not green for $PR at ${HEAD%????????????????????????????????}: $NOT_PASSING. Fix failures or wait for pending checks, then retry."
 
+# Auto-merge policy lives in the operator's Hermes home, never in the repo a PR could edit:
+# {"owner/repo": {"method": "squash", "hold_paths": ["drizzle/", "fly.toml"]}}. A hold path
+# ending in / holds everything under it. Validate before any GitHub write.
+POLICY_FILE="${KANBAN_AUTOMERGE_POLICY:-}"
+POLICY=""
+if [ -n "$POLICY_FILE" ] && [ -f "$POLICY_FILE" ]; then
+  REPO=$(printf '%s' "$PR" | sed -E 's#^https://github\.com/([^/]+/[^/]+)/pull/.*#\1#')
+  POLICY=$(jq -c --arg r "$REPO" '.[$r] // empty' "$POLICY_FILE" 2>/dev/null) || \
+    block "Human-review handoff blocked: auto-merge policy $POLICY_FILE is not valid JSON. Call kanban_block(kind=\"needs_input\") and ask the operator to fix it."
+fi
+if [ -n "$POLICY" ]; then
+  METHOD=$(printf '%s' "$POLICY" | jq -r '.method // ""')
+  case "$METHOD" in merge|squash|rebase) ;; *)
+    block "Human-review handoff blocked: auto-merge policy for $REPO has method \"$METHOD\"; it must be merge, squash or rebase. Call kanban_block(kind=\"needs_input\") and ask the operator to fix it." ;;
+  esac
+  # gh caps the file list, so an incomplete list counts as touching a held path.
+  HELD=$(printf '%s' "$PR_JSON" | jq -r --argjson p "$POLICY" '
+    if (.files == null) or (.changedFiles != (.files | length)) then "more files than GitHub listed"
+    else [.files[].path | select(. as $f | any($p.hold_paths[]? as $h | if ($h | endswith("/")) then ($f | startswith($h)) else $f == $h end; .))] | join(", ")
+    end')
+fi
+
 if [ "$(printf '%s' "$PR_JSON" | jq -r '.isDraft')" = "true" ]; then
   $GH pr ready "$PR" >/dev/null 2>&1 || \
     block "Human-review handoff blocked: CI is green but could not mark $PR ready for review with gh. Retry."
+fi
+# The card still parks on the operator; the router completes it once GitHub merges. A merge
+# that cannot be enabled is explained on the PR instead of blocking the approved handoff.
+if [ -n "$POLICY" ]; then
+  if [ -n "$HELD" ]; then
+    $GH pr comment "$PR" --body "Auto-merge held for the operator: changes $HELD." >/dev/null 2>&1 || true
+  elif ! ERR=$($GH pr merge "$PR" --auto "--$METHOD" --match-head-commit "$HEAD" 2>&1 >/dev/null); then
+    $GH pr comment "$PR" --body "Auto-merge was not enabled, so the operator merges this PR: $ERR" >/dev/null 2>&1 || true
+  fi
 fi
 exit 0
