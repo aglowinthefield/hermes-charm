@@ -76,10 +76,38 @@ index bbd24a67a5..cecc128ebb 100644
      # section: a slow subscriber must never stall a sibling dispatcher's tick.
      _kb._fire_dispatch_tick_hook(result, board=board, dry_run=dry_run)
 diff --git a/hermes_cli/kanban_pr_acceptance.py b/hermes_cli/kanban_pr_acceptance.py
-index cf8f6a6b0b..c242d6ed52 100644
+index cf8f6a6b0b..be11c6c431 100644
 --- a/hermes_cli/kanban_pr_acceptance.py
 +++ b/hermes_cli/kanban_pr_acceptance.py
-@@ -115,7 +115,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
+@@ -104,6 +104,27 @@ def _assignee_profile_home(assignee: str | None) -> str | None:
+         raise _GateAuthError(f"assignee profile {assignee!r} cannot be resolved") from None
+ 
+ 
++def _local_required_checks(repo: str) -> set[tuple[str, int]]:
++    """Operator-defined checks in the board owner's active Hermes home."""
++    from hermes_cli.config import load_config_readonly
++    mapping = (load_config_readonly().get("kanban") or {}).get("required_pr_checks", {})
++    if not isinstance(mapping, dict):
++        raise ValueError("kanban.required_pr_checks must be a repository mapping")
++    if repo not in mapping:
++        return set()
++    rows = mapping[repo]
++    if not isinstance(rows, list) or not rows:
++        raise ValueError("Local PR requirements must be a nonempty list")
++    required = set()
++    for row in rows:
++        if (not isinstance(row, dict) or set(row) != {"context", "app_id"}
++                or not isinstance(row["context"], str) or not row["context"].strip()
++                or type(row["app_id"]) is not int or row["app_id"] <= 0):
++            raise ValueError("Local PR requirements need a context and positive app_id")
++        required.add((row["context"], row["app_id"]))
++    return required
++
++
+ def collect_acceptance(contract: str, published_pr: str | None,
+                        assignee: str | None = None) -> dict:
+     receipt = {"ok": False, "classification": "missing", "head_sha": None,
+@@ -115,7 +136,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
          declared = _PR.fullmatch(contract)
          url = contract if declared else published_pr
          match = _PR.fullmatch(url or "")
@@ -88,7 +116,7 @@ index cf8f6a6b0b..c242d6ed52 100644
              receipt["detail"] = "Supply metadata.published_pr matching the persisted completion contract."
              return receipt
          repo, number = match[1], int(match[2])
-@@ -127,6 +127,10 @@ def collect_acceptance(contract: str, published_pr: str | None,
+@@ -127,14 +148,32 @@ def collect_acceptance(contract: str, published_pr: str | None,
              # A private repo the login cannot read resolves to null, not an error.
              raise _GateAuthError(f"HTTP 404 on graphql {repo}")
          pr = repository["pullRequest"]
@@ -99,7 +127,31 @@ index cf8f6a6b0b..c242d6ed52 100644
          sha, branch = pr["headRefOid"], pr["baseRefName"]
          receipt["head_sha"] = sha
          if not re.fullmatch(r"[0-9a-f]{40}", sha) or pr["state"] not in {"OPEN", "MERGED"}:
-@@ -184,6 +188,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
+             raise ValueError("PR is closed or current head is unavailable")
+         protection = (pr.get("baseRef") or {}).get("branchProtectionRule") or {}
+         required = {(r["context"], (r.get("app") or {}).get("databaseId")) for r in protection.get("requiredStatusChecks", [])}
+-        rules = _api(f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100",
+-                     paginate=True, profile_home=profile_home)
++        local_required = _local_required_checks(repo)
++        required.update(local_required)
++        rules_endpoint = f"repos/{repo}/rules/branches/{quote(branch, safe='')}?per_page=100"
++        try:
++            rules = _api(rules_endpoint, paginate=True, profile_home=profile_home)
++        except _GateAuthError as exc:
++            # Some private-repository plans refuse this endpoint. An explicit
++            # local rule supplies the minimum gate; all other auth reads remain
++            # mandatory, and GraphQL requirements above are never discarded.
++            if not local_required or str(exc) != f"HTTP 403 on {rules_endpoint.split('?')[0]}":
++                raise
++            rules = []
++            receipt["rules_unavailable"] = "HTTP 403"
++        if local_required:
++            receipt["local_required"] = [{"context": c, "app_id": a}
++                                         for c, a in sorted(local_required)]
+         for page in rules:
+             for rule in page:
+                 if rule["type"] == "required_status_checks":
+@@ -184,6 +223,7 @@ def collect_acceptance(contract: str, published_pr: str | None,
          if current["head"]["sha"] != sha or current["base"]["ref"] != branch or (current["state"] == "closed" and not current.get("merged")):
              receipt.update(classification="stale", detail="PR head/base changed while collecting evidence; retry.")
              return receipt
@@ -363,16 +415,111 @@ index 0000000000..0739e12a34
 +                acceptance=_ReviewAcceptance(snapshot, receipt),
 +            ):
 +                result.completed_merged_prs.append(snapshot.task_id)
+diff --git a/tests/hermes_cli/test_kanban_local_pr_checks.py b/tests/hermes_cli/test_kanban_local_pr_checks.py
+new file mode 100644
+index 0000000000..115df8d75c
+--- /dev/null
++++ b/tests/hermes_cli/test_kanban_local_pr_checks.py
+@@ -0,0 +1,86 @@
++"""Explicit local CI requirements never accept missing, failed, or stale checks."""
++import pytest
++
++from hermes_cli import kanban_pr_acceptance as acceptance
++from tests.hermes_cli.test_kanban_pr_acceptance import github  # noqa: F401
++
++URL = "https://github.com/acme/repo/pull/7"
++
++
++def local_rule(monkeypatch, repo="acme/repo"):
++    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {
++        "kanban": {"required_pr_checks": {repo: [{"context": "required", "app_id": 1}]}}
++    })
++
++
++@pytest.mark.parametrize("state,ok", [
++    ({"conclusion": "success"}, True),
++    ({"conclusion": "failure"}, False),
++    ({"conclusion": "pending"}, False),
++    ({"conclusion": "skipped"}, False),
++    ({"missing": True}, False),
++    ({"stale": True}, False),
++    ({"head_change": True}, False),
++    ({"runs": [{"id": 42, "name": "required", "head_sha": "a" * 40,
++                 "app": {"id": 2}, "status": "completed", "conclusion": "success"}]}, False),
++])
++def test_local_rule_on_rules_paywall_requires_exact_head_success(github, monkeypatch, state, ok):
++    local_rule(monkeypatch)
++    github.update(no_protection=True, rules_error=403, **state)
++    receipt = acceptance.collect_acceptance(URL, URL)
++    assert receipt["ok"] is ok
++    assert receipt["required"] == [{"context": "required", "app_id": 1}]
++    assert "fixture-secret" not in str(receipt)
++
++
++def test_local_rule_does_not_cover_other_repos(github, monkeypatch):
++    local_rule(monkeypatch, "other/repo")
++    github.update(no_protection=True, rules_error=403)
++    assert acceptance.collect_acceptance(URL, URL)["classification"] == "auth"
++
++
++@pytest.mark.parametrize("status", [401, 404, 500])
++def test_local_rule_does_not_ignore_other_rules_errors(github, monkeypatch, status):
++    local_rule(monkeypatch)
++    github.update(no_protection=True, rules_error=status)
++    assert not acceptance.collect_acceptance(URL, URL)["ok"]
++
++
++def test_local_rule_does_not_ignore_repository_auth_failure(github, monkeypatch):
++    local_rule(monkeypatch)
++    github["http_error"] = 403
++    assert acceptance.collect_acceptance(URL, URL)["classification"] == "auth"
++
++
++def test_local_rule_adds_to_repository_requirements(github, monkeypatch):
++    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {
++        "kanban": {"required_pr_checks": {"acme/repo": [{"context": "extra", "app_id": 1}]}}
++    })
++    receipt = acceptance.collect_acceptance(URL, URL)
++    assert not receipt["ok"]
++    assert len(receipt["required"]) == 2
++
++
++@pytest.mark.parametrize("rule", [[], "required", [{"context": "", "app_id": 1}],
++                                 [{"context": "required", "app_id": True}]])
++def test_invalid_local_rule_fails_closed(github, monkeypatch, rule):
++    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda: {
++        "kanban": {"required_pr_checks": {"acme/repo": rule}}
++    })
++    assert not acceptance.collect_acceptance(URL, URL)["ok"]
++
++
++@pytest.mark.parametrize("conclusion,done", [("success", True), ("failure", False)])
++def test_dispatch_reconciles_local_gate_only_after_success(github, monkeypatch, conclusion, done):
++    from hermes_cli import kanban_db as kb, kanban_db_dispatch as dispatch, kanban_pr_reconcile
++    from hermes_cli.kanban_db_connect import connect
++    kanban_pr_reconcile._CACHE.clear()
++    local_rule(monkeypatch)
++    github.update(no_protection=True, rules_error=403, pr_state="MERGED", conclusion=conclusion)
++    with connect() as conn:
++        tid = kb.create_task(conn, title="Publish", completion_contract=URL)
++        assert kb.request_review(conn, tid, metadata={"published_pr": URL})
++        result = dispatch.dispatch_once(conn, max_spawn=0)
++        assert (tid in result.completed_merged_prs) is done
++        assert (kb.get_task(conn, tid).status == "done") is done
++    kanban_pr_reconcile._CACHE.clear()
 diff --git a/tests/hermes_cli/test_kanban_pr_acceptance.py b/tests/hermes_cli/test_kanban_pr_acceptance.py
-index a31fbac7af..5e801997fb 100644
+index a31fbac7af..663cf97b86 100644
 --- a/tests/hermes_cli/test_kanban_pr_acceptance.py
 +++ b/tests/hermes_cli/test_kanban_pr_acceptance.py
-@@ -18,10 +18,13 @@ def github(tmp_path, monkeypatch):
+@@ -18,12 +18,18 @@ def github(tmp_path, monkeypatch):
      class Handler(BaseHTTPRequestHandler):
          def do_GET(self):
              state["requests"].append(self.path)
 +            if state.get("http_error"):
 +                self.send_error(state["http_error"], "fixture-secret-must-not-escape")
++                return
++            if "/rules/branches/" in self.path and state.get("rules_error"):
++                self.send_error(state["rules_error"], "fixture-secret-must-not-escape")
 +                return
              sha = state["head"]
              if self.path == "/graphql":
@@ -380,9 +527,12 @@ index a31fbac7af..5e801997fb 100644
 -                    "headRefOid": sha, "baseRefName": "main", "state": "OPEN",
 +                    "headRefOid": sha, "baseRefName": "main", "state": state.get("pr_state", "OPEN"),
                      "baseRef": {"branchProtectionRule": {"requiredStatusChecks": [
-                         {"context": "required", "app": {"databaseId": 1}}]}}}}}}
+-                        {"context": "required", "app": {"databaseId": 1}}]}}}}}}
++                        {"context": "required", "app": {"databaseId": 1}}] if not state.get("no_protection") else []}}}}}}
              elif "/rules/branches/" in self.path:
-@@ -32,7 +35,7 @@ def github(tmp_path, monkeypatch):
+                 value = [[]]
+             elif "/check-runs" in self.path:
+@@ -32,7 +38,7 @@ def github(tmp_path, monkeypatch):
                         "html_url": "https://github.com/acme/repo/actions/runs/42"}
                  if state.get("stale"):
                      run["head_sha"] = "b" * 40
@@ -391,7 +541,7 @@ index a31fbac7af..5e801997fb 100644
                  value = [{"total_count": 100 + len(runs), "check_runs": [
                      {**run, "id": 1000 + i, "name": "optional", "conclusion": "skipped"}
                      for i in range(100)]}, {"total_count": 100 + len(runs), "check_runs": runs}]
-@@ -43,7 +46,9 @@ def github(tmp_path, monkeypatch):
+@@ -43,7 +49,9 @@ def github(tmp_path, monkeypatch):
              elif "/statuses" in self.path:
                  value = [[]]
              elif "/pulls/" in self.path:
@@ -402,7 +552,7 @@ index a31fbac7af..5e801997fb 100644
              else:
                  self.send_error(404)
                  return
-@@ -62,7 +67,10 @@ def github(tmp_path, monkeypatch):
+@@ -62,7 +70,10 @@ def github(tmp_path, monkeypatch):
      gh = shim / "gh"
      gh.write_text(f"#!{sys.executable}\nimport sys,urllib.request\n"
                    f"u='http://127.0.0.1:{server.server_port}/'+sys.argv[2]\n"
@@ -414,7 +564,7 @@ index a31fbac7af..5e801997fb 100644
      gh.chmod(0o755)
      monkeypatch.setenv("PATH", str(shim) + os.pathsep + os.environ["PATH"])
      monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
-@@ -109,6 +117,49 @@ def test_pr_completion_requires_current_required_evidence(github):
+@@ -109,6 +120,49 @@ def test_pr_completion_requires_current_required_evidence(github):
          assert len(github["requests"]) == before
  
  
@@ -464,7 +614,7 @@ index a31fbac7af..5e801997fb 100644
  @pytest.mark.platforms("linux")
  def test_acceptance_receipts_and_terminal_write_share_run_ownership(github):
      with connect() as conn:
-@@ -230,3 +281,41 @@ def test_assigned_card_with_unresolvable_profile_is_auth_not_ambient(tmp_path, m
+@@ -230,3 +284,41 @@ def test_assigned_card_with_unresolvable_profile_is_auth_not_ambient(tmp_path, m
              "SELECT payload FROM task_events WHERE task_id=? AND kind='pr_acceptance'", (tid,)).fetchone()[0])
      assert receipt["classification"] == "auth"
      assert "'ghost'" in receipt["detail"] and "cannot be resolved" in receipt["detail"]
