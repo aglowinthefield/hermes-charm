@@ -16,12 +16,10 @@ SCRIPTS = ROOT / "scripts"
 
 
 def fixture(home):
-    notification = {"notify_platform": "test-platform", "notify_chat_id": "test-chat",
-                    "notify_chat_type": "channel", "notifier_profile": "test-notifier",
-                    "delivery_mode": "notify"}
+    # No notification destination: card notifications belong to Aide, not these integrations.
     routing = {"home": str(home), "implementer": "builder", "implementer_label": "Builder",
                "reviewer": "auditor", "review_path": str(home / "REVIEW.md"),
-               "net_fails_before_alert": 3, **notification}
+               "net_fails_before_alert": 3}
     return {
         "linear-intake": {**routing, "op_ref": "op://Test/Linear/credential",
                           "team_to_board": {"TEST": "example"},
@@ -82,7 +80,6 @@ class SettingsTests(unittest.TestCase):
                     if filename == 'linear-intake.py':
                         with patch.object(module, 'branch_taken', return_value=False):
                             module.create_card('example', issue)
-                        module.subscribe_card('example', 'card')
                     else:
                         module.sh(['hermes', 'kanban', '--board', 'example', 'list'])
                     for call in run.call_args_list:
@@ -154,8 +151,6 @@ class SettingsTests(unittest.TestCase):
                 patch.object(module, "branch_taken", return_value=False):
             module.create_card("example", issue)
             create = run.call_args.args[0]
-            module.subscribe_card("example", "card")
-            subscribe = run.call_args.args[0]
         self.assertIn("builder", create)
         self.assertIn("example/repo", create)
         self.assertIn('reviewer="auditor"', module.build_body(issue, "builder"))
@@ -165,8 +160,6 @@ class SettingsTests(unittest.TestCase):
             body = module.build_body(issue, assignee)
             self.assertNotIn("Linear-only spec text", body)
             self.assertIn("https://example.test/issue", body)
-        for value in ["test-platform", "test-chat", "test-notifier"]:
-            self.assertIn(value, subscribe)
         with patch.object(module.subprocess, "run", return_value=subprocess.CompletedProcess(
                 [], 0, stdout="test-key", stderr="")) as run, patch.dict(os.environ, {}, clear=True):
             self.assertEqual(module.linear_key(), "test-key")
@@ -219,7 +212,9 @@ class SettingsTests(unittest.TestCase):
         body = create[create.index("--body") + 1]
         self.assertIn("Configured repo notes", body)
         self.assertIn('reviewer="auditor"', body)
-        self.assertIn("test-notifier", calls[-1])
+        # Card notifications belong to Aide: filing a card adds no Hermes delivery subscription.
+        self.assertIs(calls[-1], create)
+        self.assertFalse(any("notify-subscribe" in c for c in calls))
 
     def test_review_hook_reads_configuration_with_environment_overrides(self):
         self.config.write_text(json.dumps(fixture(self.home)))

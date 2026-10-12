@@ -56,11 +56,6 @@ IMPLEMENTER_LABEL = get("linear-intake", "implementer_label")
 ORCHESTRATOR_LABEL = get("linear-intake", "orchestrator_label")
 REVIEWER = get("linear-intake", "reviewer")
 REVIEW_PATH = get("linear-intake", "review_path")
-NOTIFY_PLATFORM = get("linear-intake", "notify_platform")
-NOTIFY_CHAT_ID = get("linear-intake", "notify_chat_id")
-NOTIFY_CHAT_TYPE = get("linear-intake", "notify_chat_type")
-NOTIFIER_PROFILE = get("linear-intake", "notifier_profile")
-DELIVERY_MODE = get("linear-intake", "delivery_mode")
 NET_FAILS_BEFORE_ALERT = get("linear-intake", "net_fails_before_alert")
 NOTIFIER = get("linear-intake", "notifier")
 HOLD_LABELS = {label.strip().lower() for label in get("linear-intake", "hold_labels")}
@@ -344,24 +339,6 @@ def intake_root_on_board(board: str, identifier: str) -> str | None:
         conn.close()
 
 
-def card_is_subscribed(board: str, task_id: str) -> bool:
-    db = HOME / "kanban" / "boards" / board / "kanban.db"
-    if not db.exists():
-        return False
-    conn = sqlite3.connect(str(db), timeout=10)
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM kanban_notify_subs WHERE task_id = ? AND platform = ? "
-            "AND chat_id = ? LIMIT 1",
-            (task_id, NOTIFY_PLATFORM, NOTIFY_CHAT_ID),
-        ).fetchone()
-        return row is not None
-    except sqlite3.Error:
-        return False
-    finally:
-        conn.close()
-
-
 def open_blockers(issue: dict) -> list[str]:
     """Identifiers of unfinished issues that block this one (Linear's inverse `blocks` relations)."""
     return [
@@ -406,19 +383,6 @@ def create_card(board: str, issue: dict, parents: list[str] | tuple[str, ...] = 
     return data.get("id") or "", int(data.get("created_at") or 0) >= RUN_START
 
 
-def subscribe_card(board: str, task_id: str) -> None:
-    """Use Hermes' native terminal-event delivery for blocked/completed cards."""
-    r = subprocess.run(
-        ["hermes", "kanban", "--board", board, "notify-subscribe", task_id,
-         "--platform", NOTIFY_PLATFORM, "--chat-id", NOTIFY_CHAT_ID,
-         "--chat-type", NOTIFY_CHAT_TYPE, "--notifier-profile", NOTIFIER_PROFILE,
-         "--delivery-mode", DELIVERY_MODE],
-        capture_output=True, text=True, timeout=30, check=False, env=hermes_environment(HOME),
-    )
-    if r.returncode != 0:
-        raise RuntimeError(f"kanban subscribe failed: {r.stderr.strip()[-300:]}")
-
-
 def notify(subtitle: str, body: str) -> None:
     if os.access(NOTIFIER, os.X_OK):
         subprocess.run([NOTIFIER, "-title", "Hermes Kanban", "-subtitle", subtitle, "-message", body,
@@ -449,14 +413,7 @@ def main() -> int:
         board = TEAM_TO_BOARD.get(issue["team"]["key"])
         if not board:
             continue
-        if root := intake_root_on_board(board, ident):
-            if not card_is_subscribed(board, root):
-                try:
-                    subscribe_card(board, root)
-                    report.append(f"{board}/{root} subscription restored for {ident}")
-                except Exception as exc:
-                    report.append(f"{ident}: {exc}")
-                    continue
+        if intake_root_on_board(board, ident):
             seen.add(ident)
             external_work.pop(ident, None)
             continue
@@ -501,13 +458,11 @@ def main() -> int:
         seen.add(ident)
         try:
             task_id, created = create_card(board, issue, parents)
-            subscribe_card(board, task_id)
         except Exception as exc:
             # Only retry next tick when no card covers the issue. If the card was created
-            # but subscribing (or a late step) failed, discarding the seen mark re-creates
-            # it on the next tick, and a janitor archiving the fresh copies turns that
-            # into a create/archive fight when fresh cards are repeatedly archived. The
-            # subscription-restore path above already re-subscribes existing roots.
+            # but a late step failed, discarding the seen mark re-creates it on the next
+            # tick, and a janitor archiving the fresh copies turns that into a
+            # create/archive fight when fresh cards are repeatedly archived.
             if not (intake_root_on_board(board, ident) or already_on_board(board, ident)):
                 seen.discard(ident)
             report.append(f"{ident}: {exc}")

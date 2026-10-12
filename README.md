@@ -197,7 +197,7 @@ No automatic backend restarts, network telemetry or unreviewed plugin updates oc
 | Card-body gate | `agent-hooks/kanban-card-body-gate.sh` | Optional registration; migration does not enable it |
 | Block-claim auditing and weekly report | `agent-hooks/kanban-blocked-claim-audit.sh`, `scripts/claim-audit-weekly.py` | Shadow-only hook and home schedule |
 | Parked-review and give-up notifications | `agent-hooks/kanban-review-parked.sh`, `scripts/kanban-giveup-watch.py` | Home board, destination, identities, and schedule |
-| CI watcher and Linear intake | `scripts/ci-watchdog.py`, `scripts/linear-intake.py` | Required deployment JSON; existing state controls live/shadow behavior |
+| CI watcher and Linear intake | `scripts/ci-watchdog.py`, `scripts/linear-intake.py` | Required deployment JSON; existing state controls live/shadow behavior; cards get no notification subscription |
 | Worktree maintenance | `scripts/kanban-worktree-sweep.py` | Home schedule and active runtime paths |
 | Conflicting-PR rework routing | `scripts/pr-conflict-sweep.py` | Required deployment JSON; reopens only cards parked on the human review assignee |
 

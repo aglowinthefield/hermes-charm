@@ -1,5 +1,5 @@
 #!/bin/sh
-# Focused tests for Linear intake's native branch and notification fields.
+# Focused tests for Linear intake's card creation, routing and external-work checks.
 set -eu
 python3 - "$(dirname "$0")/../scripts/linear-intake.py" <<'PY'
 import importlib.util
@@ -27,9 +27,7 @@ fixture_config.write_text(json.dumps({"linear-intake": {
     "orchestrator": "planner", "orchestrator_label": "Planner",
     "hold_labels": ["needs-triage", "needs-info"],
     "reviewer": "auditor", "review_path": str(Path(fixture_home.name) / "REVIEW.md"),
-    "notify_platform": "test-platform", "notify_chat_id": "test-chat",
-    "notify_chat_type": "channel", "notifier_profile": "test-notifier",
-    "delivery_mode": "notify", "net_fails_before_alert": 3,
+    "net_fails_before_alert": 3,
     "notifier": str(Path(fixture_home.name) / "absent-notifier")
 }}))
 sys.path.insert(0, str(Path(sys.argv[1]).resolve().parent))
@@ -88,31 +86,40 @@ class LinearIntakeTest(unittest.TestCase):
         self.assertNotIn("--branch", command)
         self.assertNotIn("--workspace", command)
 
-    def test_subscription_uses_native_terminal_event_delivery(self):
-        with patch.object(
-            linear_intake.subprocess,
-            "run",
-            return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""),
-        ) as run:
-            linear_intake.subscribe_card("example", "t_direct")
-        self.assertEqual(
-            run.call_args.args[0],
-            [
-                "hermes", "kanban", "--board", "example", "notify-subscribe", "t_direct",
-                "--platform", "test-platform", "--chat-id", "test-chat",
-                "--chat-type", "channel", "--notifier-profile", "test-notifier",
-                "--delivery-mode", "notify",
-            ],
-        )
+    def test_intake_never_subscribes_cards_to_notifications(self):
+        """Card notifications come from Aide, so intake must not add Hermes delivery subscriptions."""
+        commands = []
 
-    def test_subscription_failure_is_retryable(self):
-        with patch.object(
-            linear_intake.subprocess,
-            "run",
-            return_value=subprocess.CompletedProcess([], 2, stdout="", stderr="delivery unavailable"),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "delivery unavailable"):
-                linear_intake.subscribe_card("example", "t_direct")
+        def fake_run(command, **kwargs):
+            commands.append(command)
+            return self.fake_create(command, **kwargs)
+
+        second = issue()
+        second["identifier"] = "TEST-124"
+        with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as directory:
+            state = Path(directory) / "state.json"
+            state.write_text(json.dumps({"seen": []}))
+            with patch.object(linear_intake, "STATE", state), \
+                 patch.object(linear_intake, "linear_key", return_value="key"), \
+                 patch.object(linear_intake, "fetch_open_assigned", return_value=[issue(), second]), \
+                 patch.object(linear_intake, "intake_root_on_board",
+                              side_effect=lambda _b, ident: "t_root" if ident == "TEST-124" else None), \
+                 patch.object(linear_intake, "already_on_board", return_value=None), \
+                 patch.object(linear_intake, "existing_external_work", return_value=(None, True)), \
+                 patch.object(linear_intake, "branch_taken", return_value=False), \
+                 patch.object(linear_intake, "notify"), \
+                 patch.object(linear_intake.subprocess, "run", side_effect=fake_run):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    linear_intake.main()
+                saved = json.loads(state.read_text())
+
+        self.assertIn("example/t_direct <- TEST-123", output.getvalue())
+        self.assertNotIn("subscription", output.getvalue())
+        self.assertEqual([c[:5] for c in commands], [["hermes", "kanban", "--board", "example", "create"]])
+        self.assertFalse(any("notify-subscribe" in c for c in commands))
+        self.assertEqual(sorted(saved["seen"]), ["TEST-123", "TEST-124"])
+        self.assertFalse(hasattr(linear_intake, "subscribe_card"))
 
     def test_existing_reconciliation_targets_only_the_exact_intake_root(self):
         with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as directory:
@@ -126,9 +133,6 @@ class LinearIntakeTest(unittest.TestCase):
                     id TEXT PRIMARY KEY, status TEXT, created_by TEXT,
                     idempotency_key TEXT, branch_name TEXT
                 );
-                CREATE TABLE kanban_notify_subs (
-                    task_id TEXT, platform TEXT, chat_id TEXT
-                );
                 INSERT INTO tasks VALUES
                     ('t_manual', 'ready', 'planner', 'TEST-123', 'test-123-fix-card-hydration-retries'),
                     ('t_child', 'ready', 'planner', 'TEST-123/part', NULL),
@@ -139,13 +143,6 @@ class LinearIntakeTest(unittest.TestCase):
                 self.assertEqual(linear_intake.intake_root_on_board("example", "TEST-123"), "t_root")
                 collision_safe = linear_intake.branch_for("example", issue())
                 self.assertRegex(collision_safe, r"^test-123-fix-card-hydration-retries-[0-9a-f]{8}$")
-                self.assertFalse(linear_intake.card_is_subscribed("example", "t_root"))
-                conn.execute(
-                    "INSERT INTO kanban_notify_subs VALUES (?, ?, ?)",
-                    ("t_root", "test-platform", "test-chat"),
-                )
-                conn.commit()
-                self.assertTrue(linear_intake.card_is_subscribed("example", "t_root"))
             conn.close()
 
     def test_existing_open_pull_request_is_treated_as_external_work(self):
@@ -279,7 +276,6 @@ class LinearIntakeTest(unittest.TestCase):
                  patch.object(linear_intake, "fetch_open_assigned", side_effect=assigned), \
                  patch.object(linear_intake, "intake_root_on_board", return_value=None), \
                  patch.object(linear_intake, "already_on_board", return_value=None), \
-                 patch.object(linear_intake, "subscribe_card"), \
                  patch.object(linear_intake, "notify"), \
                  patch.object(linear_intake, "create_card",
                               return_value=("t_new", True)) as create:
@@ -341,7 +337,6 @@ class LinearIntakeBlockerTest(unittest.TestCase):
             patch.object(linear_intake, "intake_root_on_board", return_value=None),
             patch.object(linear_intake, "already_on_board", side_effect=lambda _b, i: cards.get(i)),
             patch.object(linear_intake, "existing_external_work", return_value=(None, True)),
-            patch.object(linear_intake, "subscribe_card"),
             patch.object(linear_intake, "notify"),
             patch.object(linear_intake, "create_card", side_effect=create),
         ]

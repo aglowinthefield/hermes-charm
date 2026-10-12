@@ -48,11 +48,6 @@ IMPLEMENTER = get("ci-watchdog", "implementer")
 IMPLEMENTER_LABEL = get("ci-watchdog", "implementer_label")
 REVIEWER = get("ci-watchdog", "reviewer")
 REVIEW_PATH = get("ci-watchdog", "review_path")
-NOTIFY_PLATFORM = get("ci-watchdog", "notify_platform")
-NOTIFY_CHAT_ID = get("ci-watchdog", "notify_chat_id")
-NOTIFY_CHAT_TYPE = get("ci-watchdog", "notify_chat_type")
-NOTIFIER_PROFILE = get("ci-watchdog", "notifier_profile")
-DELIVERY_MODE = get("ci-watchdog", "delivery_mode")
 DAILY_CARD_CAP = get("ci-watchdog", "daily_card_cap")
 NET_FAILS_BEFORE_ALERT = get("ci-watchdog", "net_fails_before_alert")
 LOG_EXCERPT_CAP = get("ci-watchdog", "log_excerpt_cap")
@@ -207,15 +202,6 @@ def create_card(run: dict, excerpt: str, klass: str) -> tuple[str, bool]:
     return data.get("id") or "", int(data.get("created_at") or 0) >= RUN_START
 
 
-def subscribe_card(task_id: str) -> None:
-    r = sh(["hermes", "kanban", "--board", BOARD, "notify-subscribe", task_id,
-            "--platform", NOTIFY_PLATFORM, "--chat-id", NOTIFY_CHAT_ID,
-            "--chat-type", NOTIFY_CHAT_TYPE, "--notifier-profile", NOTIFIER_PROFILE,
-            "--delivery-mode", DELIVERY_MODE], timeout=30)
-    if r.returncode != 0:
-        raise RuntimeError(f"kanban subscribe failed: {r.stderr.strip()[-300:]}")
-
-
 def under_daily_cap(state: dict) -> bool:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     filed = state.get("filed", {})
@@ -281,7 +267,6 @@ def main() -> int:
 
         try:
             task_id, created = create_card(run, excerpt, klass)
-            subscribe_card(task_id)
         except Exception as exc:
             seen.discard(run_id)  # retry next tick
             report.append(f"{run['workflowName']}@{run['headSha'][:12]}: {exc}")
