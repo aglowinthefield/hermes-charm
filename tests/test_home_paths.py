@@ -29,7 +29,8 @@ class HomePathTests(unittest.TestCase):
             board = Path(tmp) / 'kanban/boards/silk'
             board.mkdir(parents=True)
             (board / 'board.json').write_text(json.dumps({'default_workdir': '~/silk/silk-remix'}))
-            settings = {'repo': 'example/repo', 'board': 'silk', 'park_assignee': 'tom', 'collector': '/collect.py'}
+            settings = {'repo': 'example/repo', 'board': 'silk', 'park_assignee': 'tom', 'collector': '/collect.py',
+                        'adopt_assignee': 'scribe'}
             def run(settings, db, state, cmd):
                 cmd(['gh', 'pr', 'list'])
                 return ''

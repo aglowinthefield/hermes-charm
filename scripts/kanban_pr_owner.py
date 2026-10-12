@@ -14,14 +14,24 @@ import sqlite3
 OPEN = ("todo", "ready", "running", "review", "triage", "blocked", "scheduled")
 MOVING = ("todo", "ready", "running")
 HUMAN_HELD = ("triage", "blocked", "scheduled")
+ADOPT_PREFIX = "adopt/pr-"
+
+
+def adopt_branch(number: int) -> str:
+    """The local branch an adoption card works on. It is not the PR's head name, because that
+    branch may stay checked out wherever the operator left it, and git checks a branch out in
+    one worktree at a time."""
+    return f"{ADOPT_PREFIX}{number}"
 
 
 def owning_card(db: Path, pr: dict) -> sqlite3.Row | None:
-    """Same branch name, or a run whose `metadata.published_pr` is this PR. Open cards win."""
+    """Same branch name (or the PR's adoption branch), or a run whose `metadata.published_pr`
+    is this PR. Open cards win."""
     with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)) as conn:
         conn.row_factory = sqlite3.Row
         ids = {row["id"] for row in conn.execute(
-            "SELECT id FROM tasks WHERE branch_name = ?", (pr["headRefName"],))}
+            "SELECT id FROM tasks WHERE branch_name IN (?, ?)",
+            (pr["headRefName"], adopt_branch(pr["number"])))}
         for row in conn.execute("SELECT task_id, metadata FROM task_runs WHERE metadata LIKE ?",
                                 (f"%{pr['url']}%",)):
             try:
@@ -33,7 +43,7 @@ def owning_card(db: Path, pr: dict) -> sqlite3.Row | None:
             return None
         marks = ",".join("?" * len(ids))
         cards = list(conn.execute(
-            f"SELECT id, status, assignee, claim_lock, created_at FROM tasks WHERE id IN ({marks})",
+            f"SELECT id, status, assignee, claim_lock, branch_name, created_at FROM tasks WHERE id IN ({marks})",
             tuple(ids)))
     cards.sort(key=lambda card: (card["status"] in OPEN, card["created_at"] or 0), reverse=True)
     return cards[0]

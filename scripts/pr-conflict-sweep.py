@@ -20,8 +20,15 @@ So each tick, for every open PR the authenticated `gh` user authored in the conf
      never reopened.
   4. Card already moving (ready, running, todo, or under AI review): leave it alone.
      The implementer rebases before requesting review anyway.
-  5. Card human-held (triage, blocked, scheduled), finished, or missing: report it. The
-     sweep never creates a card or touches a branch no card owns.
+  5. Card human-held (triage, blocked, scheduled), or finished: report it.
+  6. No card owns the PR (the operator opened it outside the board), or only a finished
+     adoption card does: adopt it. `--author @me` already limits the sweep to the operator's
+     own PRs, and the operator authorized adopting them. Unless a checkout of the head branch
+     holds uncommitted or unpushed work (someone is mid-change: report and leave it), fetch
+     the head, point a local `adopt/pr-<n>` branch at it, and create a worktree card for the
+     configured `adopt_assignee` that merges `origin/main` into the branch and pushes to the
+     PR's own head. The local name keeps the operator's checkouts of the head untouched. Then
+     comment on the PR saying who has it. The sweep never touches another author's branch.
 
 Each PR is acted on or reported once per head SHA; a new push or a resolved conflict resets
 it. Failures (gh, collector, hermes) are reported and retried next tick. Run by `hermes cron`
@@ -38,13 +45,14 @@ import subprocess
 import sys
 from typing import Callable
 
-from kanban_pr_owner import HUMAN_HELD, MOVING, implementer_of, owning_card, pr_comment_argv
+from kanban_pr_owner import ADOPT_PREFIX, HUMAN_HELD, MOVING, adopt_branch, implementer_of, owning_card, pr_comment_argv
 
 Runner = Callable[[list[str]], "tuple[int, str, str]"]
 
 AUTHOR = "pr-conflict-sweep"
 ACTIONABLE_VERDICTS = ("RELEVANT", "NEEDS_REWORK")
 PLAYBOOK = "docs/agent-playbooks/rebase-regenerate.md"
+FINISHED = ("done", "archived")
 
 
 def list_conflicting(cmd: Runner, repo: str) -> list[dict]:
@@ -83,12 +91,125 @@ def rework_comment(pr: dict, conflicts: list[str]) -> str:
     )
 
 
+def adoption_body(pr: dict, repo: str, conflicts: list[str]) -> str:
+    """The adoption card's spec. The body (unlike a card comment) may carry the PR URL: the
+    dispatcher's respawn guard reads comments only."""
+    head, sha, number = pr["headRefName"], pr["headRefOid"], pr["number"]
+    files = "\n".join(f"- `{path}`" for path in conflicts) or "- (collector listed none; merge to see)"
+    return (
+        f"## Goal\n\n"
+        f"Bring #{number} ({pr['title']}) up to date with `main` so it stops conflicting. The "
+        f"operator opened this PR outside the kanban board, and the operator authorized "
+        f"`pr-conflict-sweep` to adopt their own conflicting PRs, so this card adopts it for this "
+        f"one refresh.\n\n"
+        f"- PR: {pr['url']}\n"
+        f"- PR head on origin: `{head}` at `{sha}`\n"
+        f"- This card's branch: `{adopt_branch(number)}`, starting at that head. It is a local name "
+        f"only; the PR's branch may still be checked out in the operator's own checkout.\n\n"
+        f"Conflicting files:\n{files}\n\n"
+        f"## Steps\n\n"
+        f"1. Run `gh pr view {number} --repo {repo} --json author,state,headRefName,headRefOid` and "
+        f"`gh api user -q .login`. Continue only if the PR is OPEN, its author is that login, and "
+        f"its head is still `{head}` at `{sha}`. Otherwise block with `needs_input` and say what changed.\n"
+        f"2. `git fetch origin main`, then `git merge origin/main`. Merge, not rebase: the PR "
+        f"keeps its history, needs no force-push, and its screenshot commit pins stay valid. "
+        f"Resolve conflicts with the regenerate table and rules in `{PLAYBOOK}`; never hand-edit "
+        f"a generated file. Rerun the branch's targeted tests.\n"
+        f"3. Push to the PR's own branch, never a new one: `git push origin HEAD:refs/heads/{head}`. "
+        f"A rejected push means the PR moved; block with `needs_input`, do not force.\n"
+        f"4. Do not open a PR, edit the PR body, or change anything beyond the merge and its "
+        f"conflict resolution. If main rewrote the area this PR changes, or a conflict needs a "
+        f"product decision, block with `needs_input` instead of force-fitting it.\n"
+        f"5. Wait for green required checks at the new head (`gh pr checks {number} --repo {repo} "
+        f"--watch`), then `kanban_request_review` with `metadata.published_pr` set to {pr['url']}.\n\n"
+        f"## Acceptance criteria\n\n"
+        f"- #{number} reports MERGEABLE against `main` at a head this card pushed to `{head}`.\n"
+        f"- Required checks are green at that head.\n"
+        f"- No new PR, no force-push, and no change beyond the merge and its conflict resolution.\n"
+    )
+
+
+def worktrees_on(cmd: Runner, branch: str) -> list[str]:
+    """Paths of the checkouts that have `branch` checked out."""
+    rc, out, err = cmd(["git", "worktree", "list", "--porcelain"])
+    if rc != 0:
+        raise RuntimeError(f"git worktree list failed: {err.strip()[-200:]}")
+    paths, current = [], None
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            current = line[len("worktree "):]
+        elif line == f"branch refs/heads/{branch}" and current:
+            paths.append(current)
+    return paths
+
+
+def adopt(pr: dict, settings: dict, cmd: Runner, label: str) -> tuple[bool, str]:
+    """Hand an ownerless PR to a new worktree card. See step 6 of the module docstring."""
+    number, head, sha = pr["number"], pr["headRefName"], pr["headRefOid"]
+    local, tracking = adopt_branch(number), f"refs/remotes/origin/{head}"
+    rc, _, err = cmd(["git", "fetch", "--quiet", "origin", f"+refs/heads/{head}:{tracking}"])
+    if rc != 0:
+        return False, f"- {label}: could not fetch `{head}`, retrying next tick: {err.strip()[-200:]}"
+    rc, fetched, _ = cmd(["git", "rev-parse", "--verify", "--quiet", tracking])
+    if rc != 0 or fetched.strip() != sha:
+        return False, ""  # the PR moved since gh listed it; the next tick sees its new head
+    try:
+        checkouts = worktrees_on(cmd, head)
+    except RuntimeError as exc:
+        return False, f"- {label}: {exc}; retrying next tick."
+    busy = []
+    for path in checkouts:
+        rc, dirty, _ = cmd(["git", "-C", path, "status", "--porcelain"])
+        if rc != 0 or dirty.strip():
+            busy.append(f"{path} has uncommitted changes")
+    rc, ahead, _ = cmd(["git", "rev-list", "--count", f"{tracking}..refs/heads/{head}"])
+    if rc == 0 and ahead.strip() not in ("", "0"):
+        busy.append(f"local `{head}` has {ahead.strip()} unpushed commit(s)")
+    if busy:
+        return True, (f"- {label}: conflicting and no card owns it, but {'; '.join(busy)}. Left alone "
+                      f"while that work is in progress; it is adopted on the next push once clean.")
+    try:
+        stale = worktrees_on(cmd, local)
+    except RuntimeError as exc:
+        return False, f"- {label}: {exc}; retrying next tick."
+    if stale:
+        return True, (f"- {label}: conflicting; `{local}` is still checked out at {stale[0]} by an "
+                      f"earlier adoption. Remove that worktree, or route the rework by hand.")
+    rc, _, err = cmd(["git", "branch", "--force", "--no-track", local, tracking])
+    if rc != 0:
+        return False, f"- {label}: could not point `{local}` at `{head}`, retrying next tick: {err.strip()[-200:]}"
+    try:
+        _, conflicts = relevance(cmd, settings["collector"], number)
+    except (RuntimeError, ValueError):
+        conflicts = []  # the card body still works; the worker sees the files when it merges
+    assignee = settings["adopt_assignee"]
+    rc, out, err = cmd(["hermes", "kanban", "--board", settings["board"], "create",
+                        f"Refresh #{number} onto main: {pr['title'][:80]}",
+                        "--assignee", assignee, "--workspace", "worktree", "--branch", local,
+                        "--created-by", AUTHOR, "--idempotency-key", f"{AUTHOR}:{number}:{sha}",
+                        "--body", adoption_body(pr, settings["repo"], conflicts), "--json"])
+    try:
+        task = json.loads(out)["id"] if rc == 0 else None
+    except (ValueError, KeyError, TypeError):
+        task = None
+    if not task:
+        return False, f"- {label}: could not create an adoption card, retrying next tick: {(err or out).strip()[-200:]}"
+    files = ", ".join(f"`{path}`" for path in conflicts) or "none listed"
+    rc, _, err = cmd(pr_comment_argv(pr["url"], task, (
+        f"This PR conflicts with `main` and no kanban card owned it, so I created card {task} for "
+        f"**{assignee}** to merge `main` into this branch and push here. The card goes to review "
+        f"when CI is green.\n\nConflicting files: {files}"), sha))
+    note = "" if rc == 0 else f" Commenting on the PR failed: {err.strip()[-200:]}"
+    return True, f"- {label}: no card owned it; adopted as {task} for {assignee} to merge main.{note}"
+
+
 def handle(pr: dict, settings: dict, db: Path, cmd: Runner) -> tuple[bool, str]:
     """Return (done, message). done=False leaves the PR unrecorded so the next tick retries."""
     number, label = pr["number"], f"#{pr['number']} ({pr['title'][:70]})"
     card = owning_card(db, pr)
-    if card is None:
-        return True, f"- {label}: conflicting, and no kanban card owns it. Resolve by hand."
+    if card is None or (card["status"] in FINISHED
+                        and (card["branch_name"] or "").startswith(ADOPT_PREFIX)):
+        return adopt(pr, settings, cmd, label)
     status, task = card["status"], card["id"]
     if status in MOVING or (status == "review" and (card["assignee"] != settings["park_assignee"]
                                                      or card["claim_lock"])):
@@ -163,7 +284,7 @@ def main() -> int:
 
     home = Path(os.environ.get("HERMES_HOME") or get("pr-conflict-sweep", "home")).expanduser()
     settings = {key: get("pr-conflict-sweep", key)
-                for key in ("repo", "board", "park_assignee", "collector")}
+                for key in ("repo", "board", "park_assignee", "collector", "adopt_assignee")}
     board_dir = home / "kanban" / "boards" / settings["board"]
     workdir = json.loads((board_dir / "board.json").read_text()).get("default_workdir") or None
     if workdir:
@@ -184,9 +305,9 @@ def main() -> int:
         state.unlink(missing_ok=True)
 
         def cmd(argv: list[str]) -> tuple[int, str, str]:
-            if argv[0] == "hermes" or argv[:3] == ["gh", "pr", "comment"]:
-                print("would run:", " ".join(argv[:6]))
-                return 0, "", ""
+            if argv[0] == "hermes" or argv[:3] == ["gh", "pr", "comment"] or argv[:2] == ["git", "branch"]:
+                print("would run:", " ".join(argv[:12]))
+                return 0, json.dumps({"id": "t_dry_run"}) if "create" in argv else "", ""
             return real(argv)
 
     report = run(settings, board_dir / "kanban.db", state, cmd)
