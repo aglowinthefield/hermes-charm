@@ -53,3 +53,7 @@ config_schema:
     type: bool
     default: true
     description: "Review completion action. Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it. Requires explicit apply and backend restart."
+  memory-runtime-notices:
+    type: bool
+    default: true
+    description: "Keep runtime notices out of memory. Skip memory sync and recall for background-process and subagent completion turns, and strip reaction notes, so memory providers only see what the user wrote. Requires explicit apply and backend restart."

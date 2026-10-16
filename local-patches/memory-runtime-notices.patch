@@ -1,0 +1,131 @@
+diff --git a/agent/memory_manager.py b/agent/memory_manager.py
+index d8f772f7f9..5ccc293a93 100644
+--- a/agent/memory_manager.py
++++ b/agent/memory_manager.py
+@@ -186,6 +186,28 @@ def _scrub(text: str) -> str:
+ 
+ _TOKEN_RE = re.compile(r"[A-Za-z0-9_\-./+]{16,}")
+ 
++# One line per reaction, prepended to the user's message (tui_gateway.methods_prompt).
++_REACTION_NOTE_RE = re.compile(r"^\[The user reacted .*\]$")
++
++
++def _strip_runtime_notices(text: Optional[str]) -> Optional[str]:
++    """Drop runtime notices Hermes delivers in the user role; None when nothing the user wrote is left.
++
++    Whole-turn notices (background-process exits, subagent and delegation completions) reuse the
++    session timeline's synthetic-prompt pattern. Reaction notes are stripped from the front of a
++    real message, which is kept.
++    """
++    if not text:
++        return text
++    from hermes_state_timeline import _SYNTHETIC_PROMPT  # lazy: the timeline imports agent modules
++
++    if _SYNTHETIC_PROMPT.match(text):
++        return None
++    lines = text.splitlines()
++    while lines and (not lines[0].strip() or _REACTION_NOTE_RE.match(lines[0].strip())):
++        lines.pop(0)
++    return "\n".join(lines).strip() or None
++
+ 
+ def _redact_for_provider(*values: Any) -> Any:
+     """Copies of ``values`` with every string scrubbed before it reaches a memory provider.
+@@ -508,9 +530,19 @@ class MemoryManager:
+     # providers get just the user's instruction (None for a bare invocation).
+     _strip_skill_scaffolding = staticmethod(extract_user_instruction_from_skill_message)
+ 
++    @classmethod
++    def _provider_text(cls, text: str) -> Optional[str]:
++        """The user's own words for provider egress, or None when the turn has none.
++
++        Strips skill scaffolding and the runtime notices Hermes delivers in the user role
++        (background-process and subagent completions, reaction notes). Extraction backends
++        otherwise store those notices as facts about the user.
++        """
++        return _strip_runtime_notices(cls._strip_skill_scaffolding(text))
++
+     def prefetch_all(self, query: str, *, session_id: str = "") -> str:
+         """Merge non-empty prefetch context from all providers (failures are non-fatal)."""
+-        clean_query = self._strip_skill_scaffolding(query)
++        clean_query = self._provider_text(query)
+         if not clean_query:
+             return ""
+         clean_query = _redact_for_provider(clean_query)
+@@ -581,7 +613,7 @@ class MemoryManager:
+     def queue_prefetch_all(self, query: str, *, session_id: str = "") -> None:
+         """Queue background prefetch on all providers for the next turn (see ``sync_all``)."""
+         providers = list(self._providers)
+-        clean_query = self._strip_skill_scaffolding(query) if providers else None
++        clean_query = self._provider_text(query) if providers else None
+         if not clean_query:
+             return
+         clean_query = _redact_for_provider(clean_query)
+@@ -610,7 +642,7 @@ class MemoryManager:
+         verbatim in a provider's store (#115104).
+         """
+         providers = list(self._providers)
+-        clean_user_content = self._strip_skill_scaffolding(user_content) if providers else None
++        clean_user_content = self._provider_text(user_content) if providers else None
+         if not clean_user_content:
+             return
+         clean_user_content, assistant_content, redacted_messages = _redact_for_provider(
+diff --git a/tests/agent/test_memory_runtime_notices.py b/tests/agent/test_memory_runtime_notices.py
+new file mode 100644
+index 0000000000..17ce7408f4
+--- /dev/null
++++ b/tests/agent/test_memory_runtime_notices.py
+@@ -0,0 +1,53 @@
++"""MemoryManager keeps Hermes's own user-role notices out of memory providers.
++
++Background-process and subagent completions arrive as user-role turns, and reaction notes are
++prepended to the user's message. Extraction backends otherwise store them as facts about the user
++("User's background process proc_x completed with exit code 0").
++"""
++
++import pytest
++
++from agent.memory_manager import MemoryManager
++from tests.agent.test_memory_skill_scaffolding import _manager_with_recorder
++
++_PROCESS_TURN = (
++    "[IMPORTANT: Background process proc_abc123 completed (exit_code=0).\n"
++    "Command: gh pr checks 3980\nOutput:\nall green\n]"
++)
++_SUBAGENT_TURN = "A background subagent you dispatched earlier has finished. Result: done."
++_REACTIONS_ONLY = (
++    '[The user reacted ❤️ to your message: "Pushed."]\n'
++    "[The user reacted 👍 to your earlier message]"
++)
++_REACTIONS_THEN_WORDS = '[The user reacted ❤️ to your message: "Pushed."]\n\nyes, do both weekly'
++
++
++@pytest.mark.parametrize(
++    ("text", "expected"),
++    [
++        (_PROCESS_TURN, None),
++        (_SUBAGENT_TURN, None),
++        (_REACTIONS_ONLY, None),
++        (_REACTIONS_THEN_WORDS, "yes, do both weekly"),
++        ("[The user reacted to the plan] mid-sentence brackets stay", "[The user reacted to the plan] mid-sentence brackets stay"),
++        ("plain message", "plain message"),
++    ],
++)
++def test_provider_text(text, expected):
++    assert MemoryManager._provider_text(text) == expected
++
++
++def test_sync_all_skips_process_notice_and_keeps_words_after_reactions():
++    mgr, provider = _manager_with_recorder()
++    mgr.sync_all(_PROCESS_TURN, "That's the run I already reported.")
++    mgr.sync_all(_REACTIONS_THEN_WORDS, "Doing both.")
++    mgr.flush_pending(timeout=5.0)
++    assert provider.synced == ["yes, do both weekly"]
++
++
++def test_prefetch_skips_reaction_only_turn():
++    mgr, provider = _manager_with_recorder()
++    assert mgr.prefetch_all(_REACTIONS_ONLY) == ""
++    mgr.queue_prefetch_all(_SUBAGENT_TURN)
++    mgr.flush_pending(timeout=5.0)
++    assert provider.prefetched == [] and provider.queued == []

@@ -21,6 +21,7 @@ patches apply to every release; `hermes charm drift` checks the next one. Rechec
 | `kanban-merged-review-sync` | [NousResearch/hermes-agent#117500](https://github.com/NousResearch/hermes-agent/pull/117500), persisted evidence and merged-card reconciliation, including the new `kanban_pr_reconcile.py` module. Cut on top of `kanban-superseded-check-runs`. |
 | `kanban-worktree-teardown` | [NousResearch/hermes-agent#123017](https://github.com/NousResearch/hermes-agent/pull/123017), rebased shared-workspace cleanup. |
 | `kanban-review-complete-action` | Local dashboard affordance: the Complete action for cards in Review, so the human reviewer can finish an approved card without reassigning it. |
+| `memory-runtime-notices` | Local fix: memory providers get the user's own words. Background-process and subagent completions are not synced or used for recall, and reaction notes are stripped from the front of a turn. Extraction backends such as mem0 otherwise store them as facts about the user. |
 
 The token-hygiene bundle combines work from
 [NousResearch/hermes-agent#120542](https://github.com/NousResearch/hermes-agent/pull/120542),
