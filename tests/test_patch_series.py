@@ -35,7 +35,7 @@ class PatchSeriesTests(unittest.TestCase):
     def commit(self, files):
         for name, text in files.items():
             (self.agent / name).parent.mkdir(parents=True, exist_ok=True)
-            (self.agent / name).write_text(text)
+            (self.agent / name).write_text(text, newline='\n')
         self.git('add', '-A')
         self.git('commit', '-q', '-m', 'c')
         return self.git('rev-parse', 'HEAD').strip()
@@ -45,7 +45,7 @@ class PatchSeriesTests(unittest.TestCase):
         before = {n: (self.agent / n).read_text() if (self.agent / n).exists() else None for n in files}
         for name, text in files.items():
             (self.agent / name).parent.mkdir(parents=True, exist_ok=True)
-            (self.agent / name).write_text(text)
+            (self.agent / name).write_text(text, newline='\n')
         self.git('add', '-A')
         patch = self.git('diff', '--cached')
         self.git('reset', '-q', '--hard')
@@ -55,12 +55,12 @@ class PatchSeriesTests(unittest.TestCase):
         return patch
 
     def configure(self, entries):
-        (self.patches / 'ACTIVE').write_text('# order\n' + '\n'.join(entries) + '\n')
+        (self.patches / 'ACTIVE').write_text('# order\n' + '\n'.join(entries) + '\n', newline='\n')
         pins = {}
         for name, patch in entries.items():
-            (self.patches / f'{name}.patch').write_text(patch)
+            (self.patches / f'{name}.patch').write_text(patch, newline='\n')
             pins[name] = hashlib.sha256(patch.encode()).hexdigest()
-        (self.patches / 'pins.json').write_text(json.dumps(pins))
+        (self.patches / 'pins.json').write_text(json.dumps(pins), newline='\n')
 
     def run_series(self, *args):
         result = subprocess.run([sys.executable, str(SCRIPT), *args, '--agent', str(self.agent),
@@ -148,7 +148,7 @@ class PatchSeriesTests(unittest.TestCase):
 
     def test_unpinned_artifact_is_refused(self):
         self.configure({'fix': self.diff_for({'f.txt': BASE.replace('line 3\n', 'LINE 3\n')})})
-        (self.patches / 'fix.patch').write_text((self.patches / 'fix.patch').read_text() + ' ')
+        (self.patches / 'fix.patch').write_text((self.patches / 'fix.patch').read_text() + ' ', newline='\n')
         result, _ = self.run_series('verify')
         self.assertEqual(result.returncode, 1)
         self.assertIn('Pin mismatch', result.stderr)

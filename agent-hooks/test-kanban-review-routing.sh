@@ -17,7 +17,8 @@ insert into task_events (task_id, kind, payload, created_at) values
 export HERMES_KANBAN_DB="$DB"
 
 t() { # $1 expect $2 tool $3 profile $4 reviewer $5 task $6 cwd $7 no_pr
-  out=$(jq -n --arg tool "$2" --arg p "$3" --arg r "$4" --arg cwd "$6" --arg no_pr "$7" \
+  # Git Bash would rewrite the fixture cwd /wt/rev into a Windows path before jq sees it.
+  out=$(MSYS2_ARG_CONV_EXCL='*' jq -n --arg tool "$2" --arg p "$3" --arg r "$4" --arg cwd "$6" --arg no_pr "$7" \
     '{tool_name:$tool,profile:$p,cwd:$cwd,tool_input:((if $r=="" then {} else {reviewer:$r} end) + (if $no_pr=="true" then {metadata:{no_pr:true}} else {} end))}' \
     | HERMES_KANBAN_TASK="$5" sh "$H" 2>/dev/null); rc=$?
   got=allow; [ $rc -eq 2 ] && got=block
