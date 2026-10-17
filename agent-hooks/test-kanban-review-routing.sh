@@ -136,15 +136,14 @@ if grep -q 'pr ready' "$GH_LOG"; then
 else
   printf 'ok    blocked handoffs leave GitHub alone\n'
 fi
-# A green handoff marks the draft PR ready on the operator's behalf; an already-ready PR is left
-# alone; a failed mark refuses the handoff so the card and the PR never disagree.
-h allow https://github.com/o/r/pull/4
+# Drafts are refused without a readiness mutation; ready PRs preserve the existing CI gate.
+h block https://github.com/o/r/pull/4
 h allow https://github.com/o/r/pull/10
 h block https://github.com/o/r/pull/11
-if grep -qx 'pr ready https://github.com/o/r/pull/4' "$GH_LOG"; then
-  printf 'ok    green handoff marks draft PR ready\n'
+if grep -q 'pr ready' "$GH_LOG"; then
+  printf 'FAIL  review gate mutated readiness\n'; fail=1
 else
-  printf 'FAIL  green handoff did not mark draft PR ready\n'; fail=1
+  printf 'ok    review gate never mutates readiness\n'
 fi
 if grep -q 'pr ready https://github.com/o/r/pull/10' "$GH_LOG"; then
   printf 'FAIL  already-ready PR was marked again\n'; fail=1
@@ -154,7 +153,7 @@ fi
 if grep -E ' api |pr merge|pr comment|--undo' "$GH_LOG" | grep -vq '/o/'; then
   printf 'FAIL  review gate made an unexpected GitHub write\n'; fail=1
 else
-  printf 'ok    repos without a policy only get pr ready\n'
+  printf 'ok    repos without a policy get no GitHub writes\n'
 fi
 
 # Auto-merge: only repos in the operator's policy file, only when no held path changed and the
@@ -175,7 +174,7 @@ nolg "unknown merge method refuses before any write" "pr merge https://github.co
 echo '{not json' > "$POLICY"
 h block https://github.com/o/auto/pull/12
 rm "$POLICY"
-h allow https://github.com/o/r/pull/4
+h block https://github.com/o/r/pull/4
 
 rm -rf "$(dirname "$DB")"
 exit $fail
