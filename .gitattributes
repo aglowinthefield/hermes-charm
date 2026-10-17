@@ -2,3 +2,5 @@
 # Preserve reviewed patch bytes and validate them through pins and git apply.
 # -text keeps core.autocrlf from checking them out as CRLF, which breaks the pins.
 local-patches/*.patch -text -whitespace
+# Hooks run under Git Bash on Windows; keep autocrlf checkouts from adding CRs.
+*.sh text eol=lf
