@@ -277,7 +277,7 @@ def build_body(issue: dict, assignee: str) -> str:
         criteria = [
             "- [ ] Implement the linked task as one focused PR and verify the affected behavior.",
             f'- [ ] The PR body carries "Closes {ident}".',
-            f'- [ ] Open one draft PR and call `kanban_request_review(reviewer="{REVIEWER}")` with its URL.',
+            f'- [ ] Open one ready-for-review PR and call `kanban_request_review(reviewer="{REVIEWER}")` with its URL.',
         ]
     else:
         reason = "it has child issues" if children else "its task description is empty"
