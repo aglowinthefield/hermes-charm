@@ -15,12 +15,14 @@ Neither command writes to the agent checkout or its repository, and neither
 retires a patch: a conflict is reported, never skipped.
 """
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -33,7 +35,8 @@ class SeriesError(RuntimeError):
 
 
 def git(cwd, *args, check=True, input_data=None):
-    result = subprocess.run(['git', '-C', str(cwd), *args], capture_output=True,
+    # Same LF contract as local_patches.git: a global autocrlf must not rewrite patched bytes.
+    result = subprocess.run(['git', '-c', 'core.autocrlf=false', '-C', str(cwd), *args], capture_output=True,
                             input=input_data, timeout=300)
     if check and result.returncode:
         raise SeriesError(f"git {' '.join(args)}: {result.stderr.decode(errors='replace').strip()}")
@@ -68,6 +71,16 @@ def snapshot(tree):
     """Stage everything so the next diff starts from the bundle-so-far."""
     git(tree, 'add', '-A')
     return git(tree, 'write-tree').stdout.decode().strip()
+
+
+def remove_tree(path):
+    """rmtree that also clears Git's read-only pack files, which Windows refuses to delete."""
+    def writable(func, target, _):
+        with contextlib.suppress(OSError):
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+    handler = {'onexc': writable} if sys.version_info >= (3, 12) else {'onerror': writable}
+    shutil.rmtree(path, **handler)
 
 
 def walk(agent, ref, directory, rebase=False, keep=False):
@@ -117,7 +130,7 @@ def walk(agent, ref, directory, rebase=False, keep=False):
         raise
     finally:
         if not keep:
-            shutil.rmtree(root, ignore_errors=True)
+            remove_tree(root)
 
 
 def bundle_tests(directory):
@@ -178,7 +191,7 @@ def main(argv=None):
                     report['tests_ok'] = run_tests(tree, python, report['tests'])
                     report['ok'] = report['tests_ok']
             finally:
-                shutil.rmtree(tree.parent, ignore_errors=True)
+                remove_tree(tree.parent)
                 report['clone'] = None
         if rebase:
             report['regenerated'] = sorted(regenerated)
