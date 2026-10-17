@@ -1,8 +1,8 @@
 diff --git a/hermes_cli/config_defaults.py b/hermes_cli/config_defaults.py
-index 41a60d06d6a9..113472dd970a 100644
+index 9efeaa94c7..cb9a509bac 100644
 --- a/hermes_cli/config_defaults.py
 +++ b/hermes_cli/config_defaults.py
-@@ -1910,6 +1910,21 @@ def _aux(timeout, *, reasoning_effort=True, **extra):
+@@ -1948,6 +1948,21 @@ DEFAULT_CONFIG = {
          # claim_expires NULL with a dead worker) that TTL/crash/stale recovery can't see. False
          # keeps orphans frozen for manual forensics.
          "reconcile_orphans": True,
@@ -25,10 +25,10 @@ index 41a60d06d6a9..113472dd970a 100644
          # On boards that never archive, the notifier GC purges subscriptions for tasks done with no
          # activity for this many days so stale rows aren't scanned forever. 0 = off.
 diff --git a/hermes_cli/kanban_db_dispatch.py b/hermes_cli/kanban_db_dispatch.py
-index 17b34604474e..132b4a8c3a9a 100644
+index 1e01999a2f..e14ce5dd2d 100644
 --- a/hermes_cli/kanban_db_dispatch.py
 +++ b/hermes_cli/kanban_db_dispatch.py
-@@ -79,6 +79,246 @@
+@@ -80,6 +80,246 @@ _RESPAWN_GUARD_SUCCESS_WINDOW = 3600  # 1 hour
  # ``HERMES_KANBAN_RATE_LIMIT_COOLDOWN_SECONDS``.
  DEFAULT_RATE_LIMIT_COOLDOWN_SECONDS = 300  # 5 minutes
  
@@ -275,7 +275,7 @@ index 17b34604474e..132b4a8c3a9a 100644
  # Within this window a GitHub PR URL in a comment blocks re-spawn.
  _RESPAWN_GUARD_PR_WINDOW = 86400  # 24 hours
  
-@@ -145,6 +385,12 @@ class DispatchResult:
+@@ -146,6 +386,12 @@ class DispatchResult:
      """Task ids whose workers bailed on a provider rate-limit / quota wall
      (EX_TEMPFAIL sentinel exit) and were released to ``ready`` WITHOUT counting
      a failure — a long quota window must never trip the circuit breaker."""
@@ -288,11 +288,11 @@ index 17b34604474e..132b4a8c3a9a 100644
      skipped_locked: bool = False
      """True when another process held the board's dispatch lock: this tick did
      no DB writes; the lock holder is making progress on the same board."""
-@@ -1541,11 +1787,21 @@ def check_respawn_guard(
+@@ -1602,11 +1848,21 @@ def check_respawn_guard(
              # the stamped rate-limit text doesn't re-trap the task.
              return None
-         ended_at = latest_run["ended_at"]
--        if ended_at is not None and (now - int(ended_at)) < rl_cooldown:
+         ended_at = _kb._to_epoch(latest_run["ended_at"])
+-        if ended_at is not None and (now - ended_at) < rl_cooldown:
 +        # ESCALATING hold: the flat cooldown re-probed an exhausted pool every
 +        # 5 minutes forever. Scale by the CONSECUTIVE rate-limited streak so a
 +        # persistently throttled card backs off to 2h instead of burning a
@@ -300,7 +300,7 @@ index 17b34604474e..132b4a8c3a9a 100644
 +        # historical 300s, so nothing regresses for a one-off throttle.
 +        streak = consecutive_rate_limited_runs(conn, task_id)
 +        hold = rate_limit_backoff_seconds(streak) if streak > 1 else rl_cooldown
-+        if ended_at is not None and (now - int(ended_at)) < hold:
++        if ended_at is not None and (now - ended_at) < hold:
 +            # Reason string unchanged ("rate_limit_cooldown"): it is a public
 +            # value asserted by existing tests, surfaced in `kanban diag` and
 +            # persisted in task_events. Only the DURATION escalates.
@@ -313,7 +313,7 @@ index 17b34604474e..132b4a8c3a9a 100644
          return None
  
      # 2. Quota / auth blocker: retrying immediately will not help.  A plain
-@@ -2038,6 +2294,17 @@ def _dispatch_lane_task(
+@@ -2108,6 +2364,17 @@ def _dispatch_lane_task(
                  _kb._append_event(conn, task_id, "respawn_guarded", {"reason": guard_reason})
          return False
  
@@ -332,7 +332,7 @@ index 17b34604474e..132b4a8c3a9a 100644
          # Later rows in this tick respect the per-profile cap; subsequent
          # ticks re-query from the DB.
 diff --git a/hermes_cli/kanban_ops.py b/hermes_cli/kanban_ops.py
-index d0b3587bcd01..1a2c355cb14c 100644
+index 37acd1872e..602525f734 100644
 --- a/hermes_cli/kanban_ops.py
 +++ b/hermes_cli/kanban_ops.py
 @@ -111,6 +111,10 @@ def _cmd_dispatch(args: argparse.Namespace) -> int:
@@ -362,7 +362,7 @@ index d0b3587bcd01..1a2c355cb14c 100644
      if res.memory_pressure:
 diff --git a/tests/hermes_cli/test_kanban_pool_admission.py b/tests/hermes_cli/test_kanban_pool_admission.py
 new file mode 100644
-index 000000000000..339dc90c2044
+index 0000000000..339dc90c20
 --- /dev/null
 +++ b/tests/hermes_cli/test_kanban_pool_admission.py
 @@ -0,0 +1,332 @@
@@ -700,7 +700,7 @@ index 000000000000..339dc90c2044
 +    assert url == ""
 diff --git a/tests/hermes_cli/test_kanban_pool_gate_wiring.py b/tests/hermes_cli/test_kanban_pool_gate_wiring.py
 new file mode 100644
-index 000000000000..907f243e8967
+index 0000000000..907f243e89
 --- /dev/null
 +++ b/tests/hermes_cli/test_kanban_pool_gate_wiring.py
 @@ -0,0 +1,162 @@
@@ -868,7 +868,7 @@ index 000000000000..907f243e8967
 +    assert spawned == [tid], "gate error must fail OPEN, not strand the card"
 diff --git a/tests/hermes_cli/test_kanban_rate_limit_replay.py b/tests/hermes_cli/test_kanban_rate_limit_replay.py
 new file mode 100644
-index 000000000000..7e220715172d
+index 0000000000..7e22071517
 --- /dev/null
 +++ b/tests/hermes_cli/test_kanban_rate_limit_replay.py
 @@ -0,0 +1,78 @@
