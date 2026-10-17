@@ -1,3 +1,4 @@
 # Unified diff context lines deliberately contain a single leading space.
 # Preserve reviewed patch bytes and validate them through pins and git apply.
-local-patches/*.patch -whitespace
+# -text keeps core.autocrlf from checking them out as CRLF, which breaks the pins.
+local-patches/*.patch -text -whitespace

@@ -5,7 +5,6 @@ No network, subprocess shell, index writes, resets, or automatic retirement.
 A lock serializes our writers; byte/mode comparisons fence unrelated edits.
 """
 import argparse
-import fcntl
 import hashlib
 import json
 import os
@@ -18,13 +17,31 @@ import tempfile
 import time
 import uuid
 
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None
+    import msvcrt
+
 
 class UnsafePatch(RuntimeError):
     pass
 
 
+def lock_exclusive(stream):
+    if fcntl:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        return
+    # LK_LOCK retries for about ten seconds, then raises OSError, which main()
+    # reports as a refusal instead of waiting forever like flock.
+    stream.seek(0)
+    msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+
+
 def git(root, *args, required=True, input_data=None):
-    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True,
+    # Patches and pins are LF bytes. A global core.autocrlf=true (the Git for
+    # Windows default) would make `git apply` write CRLF into the patched files.
+    result = subprocess.run(['git', '-c', 'core.autocrlf=false', '-C', str(root), *args], capture_output=True,
                             timeout=60, input=input_data)
     if required and result.returncode:
         raise UnsafePatch(result.stderr.decode(errors='replace').strip())
@@ -174,7 +191,7 @@ def ensure(agent, directory, state, check=False, disabled=()):
     # Lock beside the checkout so callers cannot bypass serialization by choosing
     # a different status file. Updates themselves must not run concurrently.
     with open(agent.parent / (agent.name + '.local-patches.lock'), 'a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        lock_exclusive(lock)
         head = git(agent, 'rev-parse', '--verify', 'HEAD', required=False).stdout.decode().strip()
         with tempfile.TemporaryDirectory(prefix='patch-preflight-', dir=state.parent) as temp:
             scratch = Path(temp) / 'agent'
@@ -228,7 +245,7 @@ def rollback(agent, backup, state):
     if backup.parent != state.parent.resolve() or not backup.name.startswith('patch-backup-'):
         raise UnsafePatch('Rollback must name a backup from this status directory')
     with open(agent.parent / (agent.name + '.local-patches.lock'), 'a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        lock_exclusive(lock)
         receipt = json.loads((backup / 'receipt.json').read_text())
         head = git(agent, 'rev-parse', '--verify', 'HEAD', required=False).stdout.decode().strip()
         if head != receipt['head'] or str(agent) != receipt['agent']:
