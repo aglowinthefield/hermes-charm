@@ -37,13 +37,14 @@ from pathlib import Path
 
 RUN_START = int(time.time()) - 5
 
-from deployment_settings import get, hermes_environment
+from deployment_settings import get, hermes_environment, repo_boards
 
 _CONFIG_HOME = get("ci-watchdog", "home")
 HOME = Path(os.environ.get("HERMES_HOME") or _CONFIG_HOME).expanduser()
 REPO = get("ci-watchdog", "repo")
 BOARD = get("ci-watchdog", "board")
 CONTRACT = get("ci-watchdog", "contract")
+COVER_BOARDS = repo_boards(BOARD, CONTRACT)
 IMPLEMENTER = get("ci-watchdog", "implementer")
 IMPLEMENTER_LABEL = get("ci-watchdog", "implementer_label")
 REVIEWER = get("ci-watchdog", "reviewer")
@@ -135,23 +136,27 @@ def classify(excerpt: str, workflow: str) -> str:
 
 
 def card_covered(state: dict, workflow: str, sha: str) -> str | None:
-    """A card already filed for this (workflow, SHA) — rerun failures of the same commit
-    belong on the existing card, not a new one."""
-    db = HOME / "kanban" / "boards" / BOARD / "kanban.db"
-    if not db.exists():
-        return None
-    conn = sqlite3.connect(str(db), timeout=10)
-    try:
-        row = conn.execute(
-            "SELECT id FROM tasks WHERE status != 'archived' AND created_by = 'ci-watchdog' "
-            "AND idempotency_key LIKE ? LIMIT 1",
-            (f"ci-failure/{workflow}/{sha[:12]}%",),
-        ).fetchone()
-        return row[0] if row else None
-    except sqlite3.Error:
-        return None
-    finally:
-        conn.close()
+    """`board/id` of a card already filed for this (workflow, SHA) on any board for the
+    repository. Rerun failures of the same commit belong on the existing card, not a new one,
+    including cards filed on an earlier board before the watchdog's board moved."""
+    for board in COVER_BOARDS:
+        db = HOME / "kanban" / "boards" / board / "kanban.db"
+        if not db.exists():
+            continue
+        conn = sqlite3.connect(str(db), timeout=10)
+        try:
+            row = conn.execute(
+                "SELECT id FROM tasks WHERE status != 'archived' AND created_by = 'ci-watchdog' "
+                "AND idempotency_key LIKE ? LIMIT 1",
+                (f"ci-failure/{workflow}/{sha[:12]}%",),
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        finally:
+            conn.close()
+        if row:
+            return f"{board}/{row[0]}"
+    return None
 
 
 def build_body(run: dict, excerpt: str, klass: str) -> str:
@@ -234,7 +239,7 @@ def main() -> int:
         if not first_run and recovered(run, runs):
             continue
         if existing := card_covered(state, run["workflowName"], run["headSha"]):
-            report.append(f"skip: {run['workflowName']}@{run['headSha'][:12]} already covered by {BOARD}/{existing}")
+            report.append(f"skip: {run['workflowName']}@{run['headSha'][:12]} already covered by {existing}")
             continue
 
         excerpt = failed_log_excerpt(run["databaseId"])

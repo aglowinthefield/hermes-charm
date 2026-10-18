@@ -68,6 +68,19 @@ def get(section: str, key: str, default: Any = _REQUIRED) -> Any:
     return value
 
 
+def repo_boards(primary: str, repo: str) -> list[str]:
+    """`primary` first, then every other board linear-intake maps to the same repository.
+
+    Domain routing spreads one repository's cards across boards, so a job that looks a card up
+    by PR or idempotency key has to search all of them. Without intake maps, only `primary`."""
+    try:
+        contracts = get("linear-intake", "contract_by_board", {})
+    except ConfigurationError:
+        contracts = {}
+    return [primary, *sorted(board for board, owner in contracts.items()
+                             if board != primary and owner == repo)]
+
+
 def hermes_environment(home: Path) -> dict[str, str]:
     """Bind child CLI settings and the deliberately shared Kanban root together."""
     return {**os.environ, 'HERMES_HOME': str(home), 'HERMES_KANBAN_HOME': str(home)}
