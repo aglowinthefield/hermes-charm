@@ -215,6 +215,21 @@ file. Sections are `linear-intake`, `ci-watchdog`, `review-notifications`, and
 configuration fails visibly. Credential values remain in the secret manager or
 runtime environment; JSON contains references only.
 
+Linear intake optionally accepts `label_to_board` and `lead_by_board` maps in
+its deployment section. A single `domain:*` label selects an existing board with
+the same repository contract as the team's fallback board. Missing destinations,
+unknown domains, and conflicting domain labels go to the fallback board for
+ownership triage. A configured board lead receives intake before implementation.
+Existing cards on any configured board for that repository prevent duplicate roots;
+relabeling does not move them. Cross-board open Linear blockers hold intake until
+the Linear blocker closes, because Hermes dependency links stay within one board.
+Without these maps, team-based intake keeps its existing behavior.
+
+The parked-review hook accepts `KANBAN_REVIEW_BOARD` and
+`KANBAN_REVIEW_NOTIFY_TARGET` for board-specific delivery. Set
+`KANBAN_REVIEW_NOTIFY_PROFILE` when that destination uses another profile's bot.
+Each board retains its own delivery cursor; failed sends remain pending for retry.
+
 The extraction preserves workflow policy. Bootstrap still runs after worker spawn,
 claim auditing remains shadow-only, and the retired Linear notification hook stays
 absent. No computer-use guard was copied because the active guard blocked its own

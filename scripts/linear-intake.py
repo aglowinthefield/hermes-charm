@@ -49,6 +49,9 @@ _CONFIG_HOME = get("linear-intake", "home")
 HOME = Path(os.environ.get("HERMES_HOME") or _CONFIG_HOME).expanduser()
 OP_REF = get("linear-intake", "op_ref")
 TEAM_TO_BOARD = get("linear-intake", "team_to_board")
+LABEL_TO_BOARD = {label.strip().lower(): board for label, board in
+                  get("linear-intake", "label_to_board", {}).items()}
+LEAD_BY_BOARD = get("linear-intake", "lead_by_board", {})
 CONTRACT_BY_BOARD = get("linear-intake", "contract_by_board")
 IMPLEMENTER = get("linear-intake", "implementer")
 ORCHESTRATOR = get("linear-intake", "orchestrator")
@@ -125,11 +128,43 @@ def hold_label(issue: dict) -> str | None:
     return None
 
 
-def assignee_for(issue: dict) -> str:
+def assignee_for(issue: dict, board: str | None = None) -> str:
     """Use the orchestrator only when the issue itself signals missing decomposition work."""
+    if board in LEAD_BY_BOARD:
+        return LEAD_BY_BOARD[board]
     has_description = bool((issue.get("description") or "").strip())
     has_children = bool(issue.get("children", {}).get("nodes"))
-    return IMPLEMENTER if has_description and not has_children else ORCHESTRATOR
+    return IMPLEMENTER if has_description and not has_children and not issue.get("routing_note") else ORCHESTRATOR
+
+
+def route_board(issue: dict) -> tuple[str | None, str | None]:
+    """Select a domain board, retaining the team board for missing or ambiguous ownership."""
+    fallback = TEAM_TO_BOARD.get(issue["team"]["key"])
+    if not fallback:
+        return None, None
+    labels = {node["name"].strip().lower() for node in
+              (issue.get("labels") or {}).get("nodes") or []}
+    domains = sorted(label for label in labels if label.startswith("domain:"))
+    if not domains:
+        return fallback, None
+    if len(domains) != 1:
+        return fallback, f"Conflicting domain labels: {', '.join(domains)}. Resolve ownership on {fallback}."
+    domain = domains[0]
+    destination = LABEL_TO_BOARD.get(domain)
+    if not destination:
+        return fallback, f"Unconfigured domain label {domain}. Resolve ownership on {fallback}."
+    if (not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", destination)
+            or not CONTRACT_BY_BOARD.get(destination)
+            or CONTRACT_BY_BOARD.get(destination) != CONTRACT_BY_BOARD.get(fallback)):
+        return fallback, f"Domain {domain} has an invalid repository destination. Resolve ownership on {fallback}."
+    try:
+        metadata = json.loads((HOME / "kanban/boards" / destination / "board.json").read_text())
+        available = isinstance(metadata, dict) and not metadata.get("archived")
+    except (OSError, ValueError):
+        available = False
+    if not available:
+        return fallback, f"Domain board {destination} is unavailable. Resolve ownership on {fallback}."
+    return destination, None
 
 
 def board_repo(board: str) -> Path | None:
@@ -273,6 +308,8 @@ def build_body(issue: dict, assignee: str) -> str:
     children = [child["identifier"] for child in issue.get("children", {}).get("nodes", [])]
     if children:
         lines.append(f"- Child issues: {', '.join(children)}")
+    if issue.get("routing_note"):
+        lines.append(f"- Intake routing: {issue['routing_note']}")
     if assignee == IMPLEMENTER:
         criteria = [
             "- [ ] Implement the linked task as one focused PR and verify the affected behavior.",
@@ -280,7 +317,9 @@ def build_body(issue: dict, assignee: str) -> str:
             f'- [ ] Open one ready-for-review PR and call `kanban_request_review(reviewer="{REVIEWER}")` with its URL.',
         ]
     else:
-        reason = "it has child issues" if children else "its task description is empty"
+        reason = issue.get("routing_note") or (
+            "the domain lead owns triage before implementation" if assignee in LEAD_BY_BOARD.values()
+            else "it has child issues" if children else "its task description is empty")
         criteria = [
             f"- [ ] Resolve the orchestration exception: {reason}.",
             f"- [ ] Route one implementation card to {IMPLEMENTER_LABEL} when this is one PR; fan out only when separate PRs are necessary.",
@@ -311,12 +350,14 @@ def already_on_board(board: str, identifier: str) -> str | None:
     try:
         row = conn.execute(
             "SELECT id FROM tasks WHERE status != 'archived' AND "
-            "(title LIKE ? OR title LIKE ? OR idempotency_key = ? OR idempotency_key LIKE ?) LIMIT 1",
-            (identifier + ":%", identifier + " %", identifier, identifier + "/%"),
+            "(title LIKE ? OR title LIKE ? OR title LIKE ? OR title LIKE ? "
+            "OR idempotency_key = ? OR idempotency_key LIKE ?) LIMIT 1",
+            (identifier + ":%", identifier + " %", "%] " + identifier + ":%",
+             "%] " + identifier + " %", identifier, identifier + "/%"),
         ).fetchone()
         return row[0] if row else None
-    except sqlite3.Error:
-        return None  # idempotency key on create still prevents exact duplicates
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"Cannot check existing work on {board}: {exc}") from exc
     finally:
         conn.close()
 
@@ -350,12 +391,25 @@ def open_blockers(issue: dict) -> list[str]:
     ]
 
 
+def covering_card(board: str, identifier: str) -> tuple[str, str] | None:
+    """Find existing work across boards for this repository before creating another root."""
+    contract = CONTRACT_BY_BOARD.get(board)
+    boards = [board, *sorted(other for other, repo in CONTRACT_BY_BOARD.items()
+                            if other != board and contract and repo == contract)]
+    for candidate in boards:
+        if card := already_on_board(candidate, identifier):
+            return candidate, card
+    return None
+
+
 def blocker_cards(board: str, issue: dict) -> tuple[list[str], str | None]:
     """(parent card ids, first open blocker with no live card on this board, or None)."""
     parents = []
     for blocker in open_blockers(issue):
         card = intake_root_on_board(board, blocker) or already_on_board(board, blocker)
         if not card:
+            if existing := covering_card(board, blocker):
+                return [], f"{blocker} on {existing[0]}; waiting for its Linear blocker to close"
             return [], blocker
         parents.append(card)
     return parents, None
@@ -365,9 +419,11 @@ def create_card(board: str, issue: dict, parents: list[str] | tuple[str, ...] = 
     """Returns (task_id, created). created=False when idempotency returned an existing card.
     Parents gate the card in todo until every parent card is done."""
     title = f"{issue['identifier']}: {issue['title']}"[:200]
-    assignee = assignee_for(issue)
+    assignee = assignee_for(issue, board)
     cmd = ["hermes", "kanban", "--board", board, "create", "--assignee", assignee,
            "--idempotency-key", issue["identifier"], "--created-by", "linear-intake"]
+    if issue.get("routing_note"):
+        cmd += ["--triage"]
     for parent in parents:
         cmd += ["--parent", parent]
     if assignee == IMPLEMENTER:
@@ -411,9 +467,11 @@ def main() -> int:
     pending: list[tuple[str, dict]] = []
     for issue in issues:
         ident = issue["identifier"]
-        board = TEAM_TO_BOARD.get(issue["team"]["key"])
+        board, routing_note = route_board(issue)
         if not board:
             continue
+        if routing_note:
+            issue = {**issue, "routing_note": routing_note}
         if intake_root_on_board(board, ident):
             seen.add(ident)
             external_work.pop(ident, None)
@@ -442,9 +500,9 @@ def main() -> int:
         if first_run:
             seen.add(ident)
             continue
-        if existing := already_on_board(board, ident):
+        if existing := covering_card(board, ident):
             seen.add(ident)
-            report.append(f"{board}/{existing} already covers {ident}; skipped")
+            report.append(f"{existing[0]}/{existing[1]} already covers {ident}; skipped")
             continue
         external, _ = existing_external_work(board, issue)
         if external:
@@ -453,6 +511,8 @@ def main() -> int:
             report.append(f"{ident} already has external work ({external}); skipped")
             continue
         pending.append((board, issue))
+        if routing_note:
+            report.append(f"{ident}: {routing_note}")
 
     def intake(board: str, issue: dict, parents: list[str]) -> None:
         ident = issue["identifier"]
@@ -490,7 +550,7 @@ def main() -> int:
         ident, reason = issue["identifier"], f"blocker:{missing}"
         held[ident] = reason
         if previously_held.get(ident) != reason:
-            report.append(f"{ident} held by open blocker {missing}; no card until the blocker has one")
+            report.append(f"{ident} held by open blocker {missing}; intake will retry when the dependency resolves")
 
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps(
