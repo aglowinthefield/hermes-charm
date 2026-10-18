@@ -248,6 +248,8 @@ def main() -> int:
         return 0
     board_dir = home / "kanban" / "boards" / settings["board"]
     workdir = json.loads((board_dir / "board.json").read_text()).get("default_workdir") or None
+    if workdir:
+        workdir = str(Path(workdir).expanduser())
     env = hermes_environment(home)
 
     def cmd(argv: list[str]) -> tuple[int, str, str]:
