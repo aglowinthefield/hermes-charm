@@ -45,21 +45,21 @@ class CharmTests(unittest.TestCase):
         upstream = Path(self.temp.name) / 'upstream'
         subprocess.run(['git', 'init', '-q', '-b', 'main', str(upstream)], env=env, check=True)
         text = ''.join(f'{i}\n' for i in range(20))
-        (upstream / 'f.txt').write_text(text)
+        (upstream / 'f.txt').write_text(text, newline='\n')
         git(upstream, 'add', '-A')
         git(upstream, 'commit', '-qm', 'base')
         git(self.agent, 'remote', 'add', 'origin', str(upstream))
         git(self.agent, 'fetch', '-q', 'origin', 'main')
         git(self.agent, 'checkout', '-q', '--detach', 'origin/main')
-        (self.agent / 'f.txt').write_text(text.replace('17\n', 'patched\n'))
+        (self.agent / 'f.txt').write_text(text.replace('17\n', 'patched\n'), newline='\n')
         patch = git(self.agent, 'diff')
         git(self.agent, 'checkout', '-q', '--', 'f.txt')
         patches = Path(self.temp.name) / 'patches'
         patches.mkdir()
-        (patches / 'fix.patch').write_text(patch)
-        (patches / 'ACTIVE').write_text('fix\n')
+        (patches / 'fix.patch').write_text(patch, newline='\n')
+        (patches / 'ACTIVE').write_text('fix\n', newline='\n')
         (patches / 'pins.json').write_text(json.dumps({'fix': __import__('hashlib').sha256(patch.encode()).hexdigest()}))
-        (upstream / 'f.txt').write_text(text.replace('14\n', 'upstream\n'))
+        (upstream / 'f.txt').write_text(text.replace('14\n', 'upstream\n'), newline='\n')
         git(upstream, 'commit', '-qam', 'drift')
         head = git(self.agent, 'rev-parse', 'HEAD')
         result = subprocess.run([sys.executable, str(ROOT / 'charm.py'), 'drift'], capture_output=True, text=True,
@@ -121,7 +121,7 @@ class CharmTests(unittest.TestCase):
 
     def test_startup_guard_stops_before_apply_when_native_cli_is_unavailable(self):
         launcher = self.home / 'hermes'
-        launcher.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$HERMES_HOME/calls"\nexit 23\n')
+        launcher.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$HERMES_HOME/calls"\nexit 23\n', newline='\n')
         launcher.chmod(0o755)
         result = subprocess.run(['sh', str(ROOT / 'scripts/charm-prestart.sh'), str(launcher)],
                                 env=self.env, capture_output=True, text=True)

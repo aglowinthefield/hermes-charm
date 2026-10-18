@@ -25,23 +25,23 @@ class SafetyTests(unittest.TestCase):
                     'LOCAL_PATCHES_STATE': str(self.root / 'state/status'),
                     'LOCAL_PATCHES_NOTIFY': '/usr/bin/true'}
         self.git('init', '-q')
-        (self.agent / 'f.txt').write_text('one\ntwo\nthree\n')
+        (self.agent / 'f.txt').write_text('one\ntwo\nthree\n', newline='\n')
         self.git('add', '--', 'f.txt')
-        (self.agent / 'f.txt').write_text('one\nTWO\nthree\n')
+        (self.agent / 'f.txt').write_text('one\nTWO\nthree\n', newline='\n')
         self.good = self.git('diff').stdout
-        (self.agent / 'f.txt').write_text('one\ntwo\nthree\n')
+        (self.agent / 'f.txt').write_text('one\ntwo\nthree\n', newline='\n')
 
     def git(self, *args):
         return subprocess.run(['git', '-C', str(self.agent), *args],
                               text=True, capture_output=True, check=True)
 
     def configure(self, entries):
-        (self.patches / 'ACTIVE').write_text('\n'.join(entries) + '\n')
+        (self.patches / 'ACTIVE').write_text('\n'.join(entries) + '\n', newline='\n')
         pins = {}
         for name, patch in entries.items():
-            (self.patches / (name + '.patch')).write_text(patch)
+            (self.patches / (name + '.patch')).write_bytes(patch.encode())
             pins[name] = hashlib.sha256(patch.encode()).hexdigest()
-        (self.patches / 'pins.json').write_text(json.dumps(pins))
+        (self.patches / 'pins.json').write_text(json.dumps(pins), newline='\n')
 
     def run_manager(self, *args):
         return subprocess.run([sys.executable, str(HERE.parent / 'local_patches.py'), *args],
@@ -65,7 +65,7 @@ class SafetyTests(unittest.TestCase):
         self.assertEqual((self.agent / 'f.txt').read_text(), 'one\ntwo\nthree\n')
         installed = self.run_manager()
         backup = json.loads(installed.stdout)['backup']
-        (self.agent / 'f.txt').write_text('operator changed this')
+        (self.agent / 'f.txt').write_text('operator changed this', newline='\n')
         refused = self.run_manager('--rollback', backup)
         self.assertNotEqual(refused.returncode, 0)
         self.assertEqual((self.agent / 'f.txt').read_text(), 'operator changed this')
@@ -74,10 +74,23 @@ class SafetyTests(unittest.TestCase):
         self.configure({'good': self.good})
         report = json.loads(self.run_manager().stdout)
         backup = Path(report['backup'])
-        (backup / 'before/f.txt').write_text('corrupt backup')
+        (backup / 'before/f.txt').write_text('corrupt backup', newline='\n')
         result = self.run_manager('--rollback', str(backup))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual((self.agent / 'f.txt').read_text(), 'one\nTWO\nthree\n')
+
+    def test_global_autocrlf_never_rewrites_line_endings(self):
+        # Git for Windows defaults core.autocrlf=true; the preflight scratch repo
+        # must not inherit it and install CRLF bytes into an LF checkout.
+        (self.agent / 'f.txt').write_bytes(b'one\ntwo\nthree\n')
+        self.configure({'good': 'diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n'
+                                '@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n'})
+        config = self.root / 'gitconfig'
+        config.write_text('[core]\n\tautocrlf = true\n', newline='\n')
+        self.env['GIT_CONFIG_GLOBAL'] = str(config)
+        result = self.run_manager()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.agent / 'f.txt').read_bytes(), b'one\nTWO\nthree\n')
 
     def test_check_does_not_apply(self):
         self.configure({'good': self.good})
@@ -88,7 +101,7 @@ class SafetyTests(unittest.TestCase):
 
     def test_apply_is_idempotent_preserves_other_edits_and_index(self):
         self.configure({'good': self.good})
-        (self.agent / 'unrelated').write_text('operator edit')
+        (self.agent / 'unrelated').write_text('operator edit', newline='\n')
         index = (self.agent / '.git/index').read_bytes()
         first = self.run_manager()
         self.assertEqual(first.returncode, 0, first.stderr)
@@ -103,7 +116,7 @@ class SafetyTests(unittest.TestCase):
 
     def test_changed_artifact_is_refused(self):
         self.configure({'good': self.good})
-        (self.patches / 'good.patch').write_text(self.good.replace('+TWO', '+OTHER'))
+        (self.patches / 'good.patch').write_text(self.good.replace('+TWO', '+OTHER'), newline='\n')
         result = self.run_manager()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Unreviewed', result.stderr)
@@ -112,9 +125,12 @@ class SafetyTests(unittest.TestCase):
     def test_symlink_is_refused_without_touching_referent(self):
         self.configure({'good': self.good})
         target = self.root / 'outside'
-        target.write_text('one\ntwo\nthree\n')
+        target.write_text('one\ntwo\nthree\n', newline='\n')
         (self.agent / 'f.txt').unlink()
-        (self.agent / 'f.txt').symlink_to(target)
+        try:
+            (self.agent / 'f.txt').symlink_to(target)
+        except OSError:  # Windows without Developer Mode
+            self.skipTest('symlinks need privileges here')
         result = self.run_manager()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Symlink', result.stderr)
@@ -127,7 +143,7 @@ class SafetyTests(unittest.TestCase):
                 result = self.run_manager()
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('Unsafe patch path', result.stderr)
-        (self.patches / 'ACTIVE').write_text('../good\n')
+        (self.patches / 'ACTIVE').write_text('../good\n', newline='\n')
         self.assertNotEqual(self.run_manager().returncode, 0)
 
     def test_unified_patch_format_is_supported(self):
@@ -148,13 +164,13 @@ class SafetyTests(unittest.TestCase):
     def test_failed_write_restores_earlier_files(self):
         import local_patches
         from unittest.mock import patch
-        (self.agent / 'g.txt').write_text('old\n')
+        (self.agent / 'g.txt').write_text('old\n', newline='\n')
         self.git('add', '--', 'g.txt')
-        (self.agent / 'f.txt').write_text('one\nTWO\nthree\n')
-        (self.agent / 'g.txt').write_text('new\n')
+        (self.agent / 'f.txt').write_text('one\nTWO\nthree\n', newline='\n')
+        (self.agent / 'g.txt').write_text('new\n', newline='\n')
         self.configure({'both': self.git('diff').stdout})
-        (self.agent / 'f.txt').write_text('one\ntwo\nthree\n')
-        (self.agent / 'g.txt').write_text('old\n')
+        (self.agent / 'f.txt').write_text('one\ntwo\nthree\n', newline='\n')
+        (self.agent / 'g.txt').write_text('old\n', newline='\n')
         real_put = local_patches.put
         def fail_second(root, name, value):
             if root == self.agent and name == 'g.txt':
@@ -174,25 +190,25 @@ class SafetyTests(unittest.TestCase):
     def test_ambiguous_patch_state_refuses_entire_operation(self):
         before = ''.join(f'lead{i}\n' for i in range(5)) + 'two\n' + ''.join(f'tail{i}\n' for i in range(5))
         after = before.replace('two\n', 'TWO\n')
-        (self.agent / 'f.txt').write_text(before)
-        (self.agent / 'g.txt').write_text('old\n')
+        (self.agent / 'f.txt').write_text(before, newline='\n')
+        (self.agent / 'g.txt').write_text('old\n', newline='\n')
         self.git('add', '--', 'f.txt', 'g.txt')
-        (self.agent / 'f.txt').write_text(after)
+        (self.agent / 'f.txt').write_text(after, newline='\n')
         ambiguous = self.git('diff', '--', 'f.txt').stdout
-        (self.agent / 'f.txt').write_text(before)
-        (self.agent / 'g.txt').write_text('new\n')
+        (self.agent / 'f.txt').write_text(before, newline='\n')
+        (self.agent / 'g.txt').write_text('new\n', newline='\n')
         clean = self.git('diff', '--', 'g.txt').stdout
-        (self.agent / 'g.txt').write_text('old\n')
+        (self.agent / 'g.txt').write_text('old\n', newline='\n')
         self.configure({'clean': clean})
         installed = self.run_manager()
         self.assertEqual(installed.returncode, 0, installed.stderr)
         self.configure({'ambiguous': ambiguous, 'clean': clean})
         duplicate = before + '\n' + after
-        (self.agent / 'f.txt').write_text(duplicate)
+        (self.agent / 'f.txt').write_text(duplicate, newline='\n')
         # Both directions genuinely match different blocks in the same file.
         for direction in ([], ['-R']):
             checked = subprocess.run(['git', '-C', str(self.agent), 'apply', '--check', *direction],
-                                     input=ambiguous, capture_output=True, text=True)
+                                     input=ambiguous.encode(), capture_output=True)
             self.assertEqual(checked.returncode, 0, checked.stderr)
         index = (self.agent / '.git/index').read_bytes()
         state = self.root / 'state/status'
@@ -212,7 +228,7 @@ class SafetyTests(unittest.TestCase):
         self.configure({'good': self.good})
         self.assertEqual(self.run_manager().returncode, 0)
         index = (self.agent / '.git/index').read_bytes()
-        (self.agent / 'unrelated').write_text('operator edit')
+        (self.agent / 'unrelated').write_text('operator edit', newline='\n')
         checked = self.run_manager('--check', '--disable', 'good')
         self.assertEqual(checked.returncode, 0, checked.stderr)
         self.assertEqual(json.loads(checked.stdout)['removing'], ['good'])
