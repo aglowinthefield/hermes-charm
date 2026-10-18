@@ -1,8 +1,8 @@
 diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
-index 6cf34c5..63f56a1 100644
+index 38311c04e1..e44fec427a 100644
 --- a/agent/prompt_builder.py
 +++ b/agent/prompt_builder.py
-@@ -274,7 +274,9 @@ KANBAN_GUIDANCE = (
+@@ -273,7 +273,9 @@ KANBAN_GUIDANCE = (
      "## Lifecycle\n\n"
      "1. **Orient.** Call `kanban_show()` first (no args — it defaults to your task). The response includes title, "
      "body, parent-task handoffs (summary + metadata), any prior attempts on this task if you're a retry, the full "
@@ -13,7 +13,7 @@ index 6cf34c5..63f56a1 100644
      "2. **Work inside the workspace.** `cd $HERMES_KANBAN_WORKSPACE` before any file operations. The workspace is "
      "yours for this run. Don't modify files outside it unless the task explicitly asks.\n"
      "3. **Heartbeat on long operations.** Call `kanban_heartbeat(note=...)` every few minutes during long subprocesses "
-@@ -286,6 +288,11 @@ KANBAN_GUIDANCE = (
+@@ -285,6 +287,11 @@ KANBAN_GUIDANCE = (
      "4. **Block on genuine ambiguity.** If you need a human decision you cannot infer (missing credentials, UX choice, "
      "paywalled source, peer output you need first), call `kanban_block(reason=\"...\")` and stop. Don't guess. The "
      "user will unblock with context and the dispatcher will respawn you.\n"
@@ -25,7 +25,7 @@ index 6cf34c5..63f56a1 100644
      "5. **Finish with the review model encoded by the task graph.** Always include the structured handoff (`summary`, "
      "`metadata`) on the lifecycle transition itself; never put secrets, tokens, or raw PII in these durable fields. If "
      "`kanban_show()` lists child IDs, inspect those cards with `kanban_show(task_id=...)` before choosing the terminal "
-@@ -310,6 +317,10 @@ KANBAN_GUIDANCE = (
+@@ -309,6 +316,10 @@ KANBAN_GUIDANCE = (
      "to fan out into child tasks — one per specialist, each with an explicit `assignee` and `parents=[...]` to express "
      "dependencies. Then `kanban_complete` your own task with a summary of the decomposition. Do NOT execute the work "
      "yourself; your job is routing, not implementation.\n"
@@ -37,21 +37,10 @@ index 6cf34c5..63f56a1 100644
      "**Decision ownership.** Design decisions belong to you, the orchestrator, not to workers — settle naming schemes, "
      "schemas, file formats, and API shapes before fanning out. Never let two subtree cards decide the same question: "
 diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
-index e3d372b..3d18b11 100644
+index 06af6e194a..0ec6bc6279 100644
 --- a/hermes_cli/kanban_db.py
 +++ b/hermes_cli/kanban_db.py
-@@ -325,8 +325,8 @@ def _resolve_rate_limit_cooldown_seconds() -> int:
- 
- 
- # build_worker_context() caps, sized for a ~100k-char prompt with headroom.
--_CTX_MAX_PRIOR_ATTEMPTS = 10      # most recent N prior runs shown in full
--_CTX_MAX_COMMENTS       = 30      # most recent N comments shown in full
-+_CTX_MAX_PRIOR_ATTEMPTS = 1       # most recent N prior runs shown (first line each)
-+_CTX_MAX_COMMENTS       = 12      # most recent N comments shown in full
- _CTX_MAX_FIELD_BYTES    = 4 * 1024   # per summary/error/metadata/result
- _CTX_MAX_BODY_BYTES     = 8 * 1024   # per task.body (opening post)
- _CTX_MAX_COMMENT_BYTES  = 2 * 1024   # per comment
-@@ -4075,23 +4173,55 @@ def schedule_task(
+@@ -4010,11 +4010,34 @@ def schedule_task(
  
  # --- Worker context builder (what a spawned worker sees) ---
  
@@ -88,6 +77,7 @@ index e3d372b..3d18b11 100644
      task = get_task(conn, task_id)
      if not task:
          raise ValueError(f"unknown task {task_id}")
+@@ -4025,12 +4048,21 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
      # One clock reading so every relative age in this rendering agrees.
      now = int(time.time())
      lines: list[str] = []
@@ -114,7 +104,22 @@ index e3d372b..3d18b11 100644
      return "\n".join(lines).rstrip() + "\n"
  
  
-@@ -4132,7 +4262,7 @@ def _ctx_tail(items: list, cap: int, noun: str) -> tuple[list, Optional[str]]:
+diff --git a/hermes_cli/kanban_db_context.py b/hermes_cli/kanban_db_context.py
+index bdef72e14e..42d83a2e64 100644
+--- a/hermes_cli/kanban_db_context.py
++++ b/hermes_cli/kanban_db_context.py
+@@ -20,8 +20,8 @@ if TYPE_CHECKING:
+     from hermes_cli.kanban_db import Attachment, Comment, Task
+ 
+ # build_worker_context() caps, sized for a ~100k-char prompt with headroom.
+-_CTX_MAX_PRIOR_ATTEMPTS = 10      # most recent N prior runs shown in full
+-_CTX_MAX_COMMENTS       = 30      # most recent N comments shown in full
++_CTX_MAX_PRIOR_ATTEMPTS = 1       # most recent N prior runs shown (first line each)
++_CTX_MAX_COMMENTS       = 12      # most recent N comments shown in full
+ _CTX_MAX_FIELD_BYTES    = 4 * 1024   # per summary/error/metadata/result
+ _CTX_MAX_BODY_BYTES     = 8 * 1024   # per task.body (opening post)
+ _CTX_MAX_COMMENT_BYTES  = 2 * 1024   # per comment
+@@ -64,7 +64,7 @@ def _ctx_tail(items: list, cap: int, noun: str) -> tuple[list, Optional[str]]:
      )
  
  
@@ -123,14 +128,14 @@ index e3d372b..3d18b11 100644
      lines.append(f"# Kanban task {task.id}: {task.title}")
      lines.append("")
      lines.append(f"Assignee: {task.assignee or '(unassigned)'}")
-@@ -4151,7 +4281,23 @@ def _ctx_header(lines: list[str], task: Task) -> None:
+@@ -83,7 +83,23 @@ def _ctx_header(lines: list[str], task: Task) -> None:
      if task.branch_name:
          lines.append(f"Branch:   {task.branch_name}")
      lines.append("")
 -    if task.body and task.body.strip():
 +    # Hard-blocker escalation warning: if this task blocked for the same reason N times,
 +    # a new worker must not repeat the same approach — it must block immediately.
-+    if (task.block_recurrences or 0) >= BLOCK_RECURRENCE_LIMIT:
++    if (task.block_recurrences or 0) >= _kb.BLOCK_RECURRENCE_LIMIT:
 +        lines.append(
 +            f"## ESCALATION NOTICE - block-loop detected ({task.block_recurrences}x, kind={task.block_kind!r})"
 +        )
@@ -148,7 +153,7 @@ index e3d372b..3d18b11 100644
          lines.append("## Body")
          lines.append(_ctx_cap(task.body, _CTX_MAX_BODY_BYTES))
          lines.append("")
-@@ -4168,16 +4314,23 @@ def _ctx_attachments(lines: list[str], attachments: list[Attachment]) -> None:
+@@ -100,16 +116,23 @@ def _ctx_attachments(lines: list[str], attachments: list[Attachment]) -> None:
          "tools at the absolute paths below:"
      )
      for att in attachments:
@@ -174,14 +179,14 @@ index e3d372b..3d18b11 100644
 +    summary), older ones omitted. Keeps the essential signal (that prior runs
 +    happened and their outcome) without re-sending full summaries the worker
 +    rarely reads."""
-     all_prior = [r for r in list_runs(conn, task_id) if r.ended_at is not None]
+     all_prior = [r for r in _kb.list_runs(conn, task_id) if r.ended_at is not None]
      shown, omitted_note = _ctx_tail(all_prior, _CTX_MAX_PRIOR_ATTEMPTS, "attempt")
      if not shown:
-@@ -4189,21 +4342,17 @@ def _ctx_prior_attempts(lines: list[str], conn: sqlite3.Connection, task_id: str
+@@ -121,21 +144,17 @@ def _ctx_prior_attempts(lines: list[str], conn: sqlite3.Connection, task_id: str
      for offset, run in enumerate(shown):
          profile = run.profile or "(unknown)"
          outcome = run.outcome or run.status
-+        first = _first_line(run.summary, 200) or "(no summary)"
++        first = _kb._first_line(run.summary, 200) or "(no summary)"
          lines.append(
 -            f"### Attempt {first_shown_idx + offset} — {outcome} ({profile}, {_ctx_stamp(run.started_at, now)})"
 +            f"### Attempt {first_shown_idx + offset} — {outcome} ({profile}, {_ctx_stamp(run.started_at, now)}): {first}"
@@ -202,14 +207,14 @@ index e3d372b..3d18b11 100644
      falling back to ``task.result`` for pre-runs-table data. Stamped with a
      relative age so the worker re-verifies stale upstream results."""
      parent_rows = conn.execute(
-@@ -4212,11 +4361,15 @@ def _ctx_parent_results(lines: list[str], conn: sqlite3.Connection, task_id: str
+@@ -144,11 +163,15 @@ def _ctx_parent_results(lines: list[str], conn: sqlite3.Connection, task_id: str
      wrote_header = False
      for pid in (r["parent_id"] for r in parent_rows):
-         pt = get_task(conn, pid)
+         pt = _kb.get_task(conn, pid)
 -        if not pt or pt.status != "done":
 +        if not pt or pt.status not in ("done", "archived"):
              continue
-         runs = [r for r in list_runs(conn, pid) if r.outcome == "completed"]
+         runs = [r for r in _kb.list_runs(conn, pid) if r.outcome == "completed"]
          runs.sort(key=lambda r: r.started_at, reverse=True)
          run = runs[0] if runs else None
 +        # Archiving a finished parent must not erase its handoff from children
@@ -219,14 +224,14 @@ index e3d372b..3d18b11 100644
          if not wrote_header:
              lines.append("## Parent task results")
              lines.append(
-@@ -4239,6 +4392,13 @@ def _ctx_parent_results(lines: list[str], conn: sqlite3.Connection, task_id: str
+@@ -171,6 +194,13 @@ def _ctx_parent_results(lines: list[str], conn: sqlite3.Connection, task_id: str
          meta_line = _ctx_metadata_line(run.metadata) if run is not None else None
          if meta_line:
              lines.append(meta_line)
 +        # A parent's full output often lives in an attachment (a research map, a
 +        # spec) because the summary is capped; without these paths the child has
 +        # only the summary and re-does the parent's work.
-+        parent_attachments = list_attachments(conn, pid)
++        parent_attachments = _kb.list_attachments(conn, pid)
 +        if parent_attachments:
 +            lines.append("Attachments (read at these absolute paths):")
 +            lines.extend(_ctx_attachment_line(att) for att in parent_attachments)
@@ -234,7 +239,7 @@ index e3d372b..3d18b11 100644
  
  
 diff --git a/hermes_cli/kanban_decompose.py b/hermes_cli/kanban_decompose.py
-index 47d2800..13af7ae 100644
+index 47d280089a..13af7aeb20 100644
 --- a/hermes_cli/kanban_decompose.py
 +++ b/hermes_cli/kanban_decompose.py
 @@ -337,7 +337,16 @@ def decompose_task(
@@ -257,7 +262,7 @@ index 47d2800..13af7ae 100644
 +        if (row.block_recurrences or 0) < kb.BLOCK_RECURRENCE_LIMIT
 +    ]
 diff --git a/tests/hermes_cli/test_kanban_decompose.py b/tests/hermes_cli/test_kanban_decompose.py
-index b56e9f1..0a624e3 100644
+index b56e9f1f44..0a624e32f4 100644
 --- a/tests/hermes_cli/test_kanban_decompose.py
 +++ b/tests/hermes_cli/test_kanban_decompose.py
 @@ -256,3 +256,41 @@ def test_decompose_returns_false_when_task_not_triage(kanban_home):
@@ -303,7 +308,7 @@ index b56e9f1..0a624e3 100644
 +
 +
 diff --git a/tests/plugins/test_kanban_attachments.py b/tests/plugins/test_kanban_attachments.py
-index ade77f3..09ddc0e 100644
+index ade77f31a4..09ddc0e413 100644
 --- a/tests/plugins/test_kanban_attachments.py
 +++ b/tests/plugins/test_kanban_attachments.py
 @@ -190,6 +190,33 @@ def test_worker_context_lists_attachments_with_absolute_path(kanban_home):
@@ -342,7 +347,7 @@ index ade77f3..09ddc0e 100644
  # ---------------------------------------------------------------------------
 diff --git a/tests/tools/test_kanban_show_context_trim.py b/tests/tools/test_kanban_show_context_trim.py
 new file mode 100644
-index 0000000..7c1c7dc
+index 0000000000..7c1c7dcaea
 --- /dev/null
 +++ b/tests/tools/test_kanban_show_context_trim.py
 @@ -0,0 +1,149 @@
@@ -497,10 +502,10 @@ index 0000000..7c1c7dc
 +    assert "context must be one of" in err
 diff --git a/tests/tools/test_kanban_token_optimization.py b/tests/tools/test_kanban_token_optimization.py
 new file mode 100644
-index 0000000..0f35c72
+index 0000000000..eb2c3a6834
 --- /dev/null
 +++ b/tests/tools/test_kanban_token_optimization.py
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,133 @@
 +"""PLT-010: worker token optimization — context is read once, not duplicated.
 +
 +Regression guards for the token optimization (hand-ported from upstream PR
@@ -523,6 +528,7 @@ index 0000000..0f35c72
 +
 +from hermes_cli import kanban_db as kb
 +from hermes_cli import kanban_db_connect as kbc
++from hermes_cli import kanban_db_context as kbx
 +
 +
 +@pytest.fixture
@@ -606,12 +612,12 @@ index 0000000..0f35c72
 +    conn = kbc.connect()
 +    try:
 +        tid = _make_task(conn, title="t")
-+        _add_comments(conn, tid, kb._CTX_MAX_COMMENTS + 5)
++        _add_comments(conn, tid, kbx._CTX_MAX_COMMENTS + 5)
 +        ctx = kb.build_worker_context(conn, tid)
 +    finally:
 +        conn.close()
 +    # The newest comments are present; the oldest are omitted with a note.
-+    assert f"comment {kb._CTX_MAX_COMMENTS + 4}" in ctx
++    assert f"comment {kbx._CTX_MAX_COMMENTS + 4}" in ctx
 +    assert "comment 0" not in ctx
 +    assert "omitted" in ctx
 +
@@ -634,7 +640,7 @@ index 0000000..0f35c72
 +    # Sanity: the essential body is still fully present (not truncated).
 +    assert "x" * 2000 in ctx
 diff --git a/tests/tools/test_kanban_tools.py b/tests/tools/test_kanban_tools.py
-index e80d4bc..ffe3389 100644
+index 2d5a50f584..6003aff290 100644
 --- a/tests/tools/test_kanban_tools.py
 +++ b/tests/tools/test_kanban_tools.py
 @@ -79,7 +79,11 @@ def test_show_defaults_to_env_task_id(worker_env):
@@ -651,7 +657,7 @@ index e80d4bc..ffe3389 100644
  
  def test_show_bare_call_outside_worker_returns_orientation_not_error(monkeypatch, worker_env):
 diff --git a/tools/kanban_tools.py b/tools/kanban_tools.py
-index c8b64c0..ed7a106 100644
+index c8b64c095c..ed7a106945 100644
 --- a/tools/kanban_tools.py
 +++ b/tools/kanban_tools.py
 @@ -232,6 +232,24 @@ def _own_task_env(task_id: str, var: str) -> Optional[str]:
@@ -748,10 +754,10 @@ index c8b64c0..ed7a106 100644
  
  @_kanban_handler("kanban_list")
 diff --git a/tools/kanban_tools_schemas.py b/tools/kanban_tools_schemas.py
-index 8681b00..ce4f305 100644
+index ec5a72610e..5ca2ed2d72 100644
 --- a/tools/kanban_tools_schemas.py
 +++ b/tools/kanban_tools_schemas.py
-@@ -42,6 +42,16 @@ def _schema(name: str, description: str, properties: dict[str, Any], required: l
+@@ -44,6 +44,16 @@ def _schema(name: str, description: str, properties: dict[str, Any], required: l
      }
  
  
@@ -768,7 +774,7 @@ index 8681b00..ce4f305 100644
  KANBAN_SHOW_SCHEMA = _schema(
      "kanban_show",
      (
-@@ -52,10 +62,20 @@ KANBAN_SHOW_SCHEMA = _schema(
+@@ -54,10 +64,20 @@ KANBAN_SHOW_SCHEMA = _schema(
          "pre-formatted ``worker_context`` string suitable for inclusion "
          "verbatim in your reasoning. Outside a dispatcher-spawned worker "
          "there is no default task: a bare call returns a pointer to "

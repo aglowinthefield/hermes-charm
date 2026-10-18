@@ -1,8 +1,26 @@
+diff --git a/gateway/session_kanban.py b/gateway/session_kanban.py
+index d23f09477d..71c6393fd8 100644
+--- a/gateway/session_kanban.py
++++ b/gateway/session_kanban.py
+@@ -41,7 +41,12 @@ def build_kanban_policy(connection, params, config):
+             if bound and json.loads(bound[0])['request_id'] != 'kanban:' + json.dumps([board, task.id, task.current_run_id], separators=(',', ':')):
+                 raise RuntimeStoreError('stale_kanban_claim')
+             context = kb.build_worker_context(conn, task.id)
+-            skills = list(task.skills or ())
++            # Names the assignee cannot load are dropped with a warning instead of failing the
++            # worker on boot (cards created before create-time filtering, or via the CLI).
++            skills, dropped = kb._filter_skills_for_assignee(task.assignee, list(task.skills or ()))
++            if dropped:
++                kb._log.warning('Dropping unknown skills for assignee %s on task %s: %s',
++                                task.assignee, task.id, ', '.join(dropped))
+             if kb._retry_status_for_run(conn, task.id, task.current_run_id) == 'review':
+                 # Same rule as the dispatcher's review lane: the reviewer always loads sdlc-review.
+                 skills = list(dict.fromkeys([*skills, 'sdlc-review']))
 diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
-index e3d372b96ca8..bdfb1dd3b0da 100644
+index 0e2b4e51d1..06af6e194a 100644
 --- a/hermes_cli/kanban_db.py
 +++ b/hermes_cli/kanban_db.py
-@@ -1198,6 +1198,96 @@ def _canonical_assignee(assignee: Optional[str]) -> Optional[str]:
+@@ -1047,6 +1047,96 @@ def _canonical_assignee(assignee: Optional[str]) -> Optional[str]:
      return normalize_profile_name(assignee)
  
  
@@ -99,7 +117,7 @@ index e3d372b96ca8..bdfb1dd3b0da 100644
  def _resolve_project_link(
      conn: sqlite3.Connection, project_id: Optional[str], project_source_task_id: Optional[str],
      workspace_kind: str, workspace_path: Optional[str],
-@@ -1391,6 +1481,13 @@ def create_task(
+@@ -1240,6 +1330,13 @@ def create_task(
      )
      parents = tuple(p for p in parents if p)
      skills_list = _normalize_task_skills(skills)
@@ -113,7 +131,7 @@ index e3d372b96ca8..bdfb1dd3b0da 100644
  
      # Idempotency check BEFORE the write txn (no lock held); a concurrent-create
      # race may insert twice, the next lookup stabilises on the newest.
-@@ -1467,6 +1564,7 @@ def create_task(
+@@ -1316,6 +1413,7 @@ def create_task(
                          "branch_name": branch_name,
                          "project_id": project_id,
                          "skills": list(skills_list) if skills_list else None,
@@ -121,35 +139,61 @@ index e3d372b96ca8..bdfb1dd3b0da 100644
                          "goal_mode": bool(goal_mode) or None,
                          "model_override": model_override,
                          "provider_override": provider_override,
-diff --git a/hermes_cli/kanban_db_dispatch.py b/hermes_cli/kanban_db_dispatch.py
-index d33d8b5644a9..3fb1ce7069c6 100644
---- a/hermes_cli/kanban_db_dispatch.py
-+++ b/hermes_cli/kanban_db_dispatch.py
-@@ -2764,8 +2764,20 @@ def _worker_argv(task: Task, profile_arg: str, hermes_home: Optional[str]) -> li
-         "--accept-hooks",
-     ]
-     # One `--skills X` pair per name: easier to read in `ps` and avoids quoting
--    # ambiguity if a skill name contains unusual chars.
--    for sk in task.skills or ():
-+    # ambiguity if a skill name contains unusual chars. Names the assignee
-+    # cannot load are dropped with a warning instead of crashing the worker on
-+    # boot (cards created before create-time filtering, or via the CLI).
-+    spawn_skills, dropped_spawn_skills = _kb._filter_skills_for_assignee(
-+        task.assignee, list(task.skills or [])
-+    )
-+    if dropped_spawn_skills:
-+        _kb._log.warning(
-+            "Dropping unknown skills for assignee %s on task %s: %s",
-+            task.assignee,
-+            task.id,
-+            ", ".join(dropped_spawn_skills),
-+        )
-+    for sk in spawn_skills:
-         if sk:
-             cmd.extend(["--skills", sk])
-     if task.model_override:
+diff --git a/tests/gateway/test_session_kanban.py b/tests/gateway/test_session_kanban.py
+index a3b3f8e596..22b8506658 100644
+--- a/tests/gateway/test_session_kanban.py
++++ b/tests/gateway/test_session_kanban.py
+@@ -20,6 +20,9 @@ def test_claim_freezes_task_policy_and_rejects_forgery(tmp_path, monkeypatch):
+     workspace = tmp_path / 'workspace'
+     workspace.mkdir()
+     (workspace / 'pyproject.toml').write_text('[project]\nname = "task"\n')  # a code worktree
++    skill = tmp_path / 'skills' / 'general' / 'owned-skill'  # pins the assignee cannot load are dropped
++    skill.mkdir(parents=True)
++    (skill / 'SKILL.md').write_text('---\nname: owned-skill\n---\n', encoding='utf-8')
+     from contextlib import closing
+     kb.create_board('owned')  # explicit creation; connect() never creates a board (#43243)
+     with closing(connect(board='owned')) as conn:
+@@ -54,6 +57,38 @@ def test_claim_freezes_task_policy_and_rejects_forgery(tmp_path, monkeypatch):
+         build_policy({'source': 'kanban', 'cwd': str(workspace)}, config)
+ 
+ 
++def test_claim_drops_skill_pins_the_assignee_cannot_load(tmp_path, monkeypatch):
++    """A card pinned before create-time filtering must not fail the worker on boot."""
++    from contextlib import closing
++    from hermes_cli import kanban_db as kb
++    from hermes_cli.kanban_db_connect import connect
++    from gateway.session_contract import Principal
++    from gateway.session_kanban import build_kanban_policy
++    monkeypatch.setenv('HERMES_KANBAN_HOME', str(tmp_path))
++    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
++    monkeypatch.setenv('HOME', str(tmp_path / 'home'))
++    monkeypatch.delenv('HERMES_KANBAN_DB', raising=False)
++    monkeypatch.setattr('hermes_cli.profiles.resolve_profile_env', lambda name: str(tmp_path))
++    workspace = tmp_path / 'workspace'
++    workspace.mkdir()
++    kb.create_board('pins')
++    with closing(connect(board='pins')) as conn:
++        task_id = kb.create_task(conn, title='Legacy pins', assignee='default',
++                                 workspace_kind='dir', workspace_path=str(workspace))
++        conn.execute('UPDATE tasks SET skills = ? WHERE id = ?', (json.dumps(['known', 'revenueos']), task_id))
++        kb.recompute_ready(conn)
++        task = kb.claim_task(conn, task_id)
++    skill = tmp_path / 'skills' / 'general' / 'known'
++    skill.mkdir(parents=True)
++    (skill / 'SKILL.md').write_text('---\nname: known\ndescription: fixture\n---\n', encoding='utf-8')
++    actor = Principal('owner', str(tmp_path), frozenset({'session:create'}), 'transport')
++    connection = SimpleNamespace(authority=SimpleNamespace(profile_id=str(tmp_path)), actor=actor, native_owner=True)
++    params = dict(board='pins', task_id=task.id, run_id=task.current_run_id, claim_lock=task.claim_lock)
++    config = {'model': {'default': 'm', 'provider': 'custom'}, 'platform_toolsets': {'cli': ['terminal']}}
++    policy, _secrets = build_kanban_policy(connection, params, config)
++    assert json.loads(policy.kanban_json)['skills'] == ['known']
++
++
+ @pytest.mark.parametrize('mode', ['complete', 'timeout', 'rate_limit', 'billing', 'crash'])
+ def test_real_dispatcher_lifecycle(tmp_path, mode):
+     import os
 diff --git a/tests/hermes_cli/test_kanban_core_functionality.py b/tests/hermes_cli/test_kanban_core_functionality.py
-index c82d6ff4531c..dab0cd069648 100644
+index 6ba8f4ce1c..d21bd88623 100644
 --- a/tests/hermes_cli/test_kanban_core_functionality.py
 +++ b/tests/hermes_cli/test_kanban_core_functionality.py
 @@ -10,6 +10,7 @@ parity across every registered verb.
@@ -160,7 +204,7 @@ index c82d6ff4531c..dab0cd069648 100644
  import os
  import time
  from pathlib import Path
-@@ -1394,3 +1395,123 @@ def test_dead_worker_reap_reads_the_log_of_the_dispatching_board(kanban_home):
+@@ -1391,3 +1392,97 @@ def test_dead_worker_reap_reads_the_log_of_the_dispatching_board(kanban_home):
          assert "no reassignment operation" in (task.last_failure_error or "")
      finally:
          conn.close()
@@ -258,29 +302,3 @@ index c82d6ff4531c..dab0cd069648 100644
 +        conn.close()
 +
 +    assert task.skills == ["hermes-profiles"]
-+
-+
-+def test_worker_argv_drops_unknown_skills(kanban_home):
-+    """Cards created before create-time filtering are still safe at spawn."""
-+    _plant_profile_skill(kanban_home, "orch", "human-in-loop-agent-graphs")
-+    conn = kbc.connect()
-+    try:
-+        tid = kb.create_task(
-+            conn,
-+            title="spawn filter",
-+            assignee="orch",
-+            skills=["human-in-loop-agent-graphs"],
-+        )
-+        # Simulate a legacy card that bypassed create-time filtering.
-+        conn.execute(
-+            "UPDATE tasks SET skills = ? WHERE id = ?",
-+            (json.dumps(["human-in-loop-agent-graphs", "revenueos"]), tid),
-+        )
-+        task = kb.get_task(conn, tid)
-+        assert task is not None
-+    finally:
-+        conn.close()
-+
-+    argv = kbd._worker_argv(task, "orch", None)
-+    skill_args = [argv[i + 1] for i, part in enumerate(argv[:-1]) if part == "--skills"]
-+    assert skill_args == ["human-in-loop-agent-graphs"]
