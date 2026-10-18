@@ -69,7 +69,7 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
     *)
       case "$3" in
         */4|*/5|*/6|*/11) echo '{"state":"OPEN","isDraft":true,"headRefOid":"4444444444444444444444444444444444444444"}' ;;
-        */10) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444"}' ;;
+        */10|*/17|*/18|*/19|*/20|*/21|*/22|*/23) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444"}' ;;
         */o/auto/pull/12|*/o/auto/pull/15|*/o/held/pull/16) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444","changedFiles":2,"files":[{"path":"src/a.ts"},{"path":"drizzle.config.ts"}]}' ;;
         */o/auto/pull/13) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444","changedFiles":2,"files":[{"path":"src/a.ts"},{"path":"drizzle/0001.sql"}]}' ;;
         */o/auto/pull/14) echo '{"state":"OPEN","isDraft":false,"headRefOid":"4444444444444444444444444444444444444444","changedFiles":101,"files":[{"path":"src/a.ts"}]}' ;;
@@ -80,7 +80,14 @@ if [ "$1" = pr ] && [ "$2" = view ]; then
   esac
 elif [ "$1" = pr ] && [ "$2" = checks ]; then
   case "$3" in
+    */21) echo [name:test]; exit 8 ;;
+    */22) echo [name:test]; exit 1 ;;
+    */23) echo [] ;;
     */4|*/10|*/11|*/1[2-6]) echo '[{"name":"test","state":"SUCCESS","bucket":"pass","workflow":"CI","link":"https://ci/4"}]' ;;
+    */17) echo '[{"name":"test","bucket":"pass"},{"name":"Trunk Merge Queue (main)","bucket":"pending","link":"https://app.trunk.io/org/merge-queue/17"}]'; exit 8 ;;
+    */18) echo '[{"name":"Trunk Merge Queue (main)","bucket":"pending","link":"https://app.trunk.io/org/merge-queue/18"}]'; exit 8 ;;
+    */19) echo '[{"name":"test","bucket":"fail"},{"name":"Trunk Merge Queue (main)","bucket":"pending","link":"https://app.trunk.io/org/merge-queue/19"}]'; exit 1 ;;
+    */20) echo '[{"name":"test","bucket":"pass"},{"name":"Trunk Merge Queue (main)","bucket":"pending","link":"https://example.com/20"}]'; exit 8 ;;
     */5) echo '[{"name":"test","state":"PENDING","bucket":"pending","workflow":"CI","link":"https://ci/5"}]' ;;
     */6) echo '[]' ;;
     *) exit 1 ;;
@@ -136,6 +143,19 @@ if grep -q 'pr ready' "$GH_LOG"; then
   printf 'FAIL  blocked handoff marked a PR ready\n'; fail=1
 else
   printf 'ok    blocked handoffs leave GitHub alone\n'
+fi
+# Queue admission is downstream of review; PR failures and missing evidence still block.
+h allow https://github.com/o/r/pull/17
+h allow https://github.com/o/r/pull/18
+h allow https://github.com/o/r/pull/19
+h allow https://github.com/o/r/pull/20
+# Ready handoffs never depend on pending, failed, or absent CI.
+h allow https://github.com/o/r/pull/21
+h allow https://github.com/o/r/pull/22
+h allow https://github.com/o/r/pull/23
+if grep -q 'pr checks' "$GH_LOG"; then
+  printf 'FAIL  handoff queried CI instead of leaving it asynchronous
+'; fail=1
 fi
 # Drafts are refused without a readiness mutation; ready PRs preserve the existing CI gate.
 h block https://github.com/o/r/pull/4
