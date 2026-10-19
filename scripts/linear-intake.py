@@ -295,6 +295,7 @@ def build_body(issue: dict, assignee: str) -> str:
             "",
             "## Before you start",
             f"- Read `{REVIEW_PATH}`, then the repo's `AGENTS.md`.",
+            "- Write the PR body and card comments under `~/.hermes/teams/board-writing.md`.",
             f"- If the issue is not implementation-ready or cannot land as one focused PR, block with `needs_input` and ask for {ORCHESTRATOR_LABEL} routing instead of creating child cards.",
         ]
     return "\n".join(lines) + "\n"
