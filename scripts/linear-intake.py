@@ -277,7 +277,7 @@ def build_body(issue: dict, assignee: str) -> str:
         criteria = [
             "- [ ] Implement the linked task as one focused PR and verify the affected behavior.",
             f'- [ ] The PR body carries "Closes {ident}".',
-            f'- [ ] Open one draft PR and call `kanban_request_review(reviewer="{REVIEWER}")` with its URL.',
+            f'- [ ] Open one ready-for-review PR and call `kanban_request_review(reviewer="{REVIEWER}")` with its URL.',
         ]
     else:
         reason = "it has child issues" if children else "its task description is empty"
@@ -295,6 +295,7 @@ def build_body(issue: dict, assignee: str) -> str:
             "",
             "## Before you start",
             f"- Read `{REVIEW_PATH}`, then the repo's `AGENTS.md`.",
+            "- Write the PR body and card comments under `~/.hermes/teams/board-writing.md`.",
             f"- If the issue is not implementation-ready or cannot land as one focused PR, block with `needs_input` and ask for {ORCHESTRATOR_LABEL} routing instead of creating child cards.",
         ]
     return "\n".join(lines) + "\n"

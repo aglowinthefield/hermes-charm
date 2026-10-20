@@ -175,7 +175,7 @@ Fix the `{run['workflowName']}` failure on `main` at `{run['headSha'][:12]}`.
 ## Acceptance criteria
 - [ ] Root cause identified from the run log (not just the excerpt above — pull the full log).
 - [ ] Fix implemented in the worktree and the failing check reproduced locally first.
-- [ ] One draft PR; required checks green at head before `kanban_request_review(reviewer="{REVIEWER}")`.
+- [ ] One ready-for-review PR; required checks green at head before `kanban_request_review(reviewer="{REVIEWER}")`.
 - [ ] If the real cause is infra/secrets/environment, block with `needs_input` instead of patching code.
 
 ## Before you start

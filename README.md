@@ -194,7 +194,6 @@ No automatic backend restarts, network telemetry or unreviewed plugin updates oc
 | Implementation | Entry point | Configuration owner |
 | --- | --- | --- |
 | Review routing, CI handoff gate and per-repo auto-merge | `agent-hooks/kanban-review-routing.sh` | Home supplies reviewer, operator, investigation profile, board paths, and the optional `KANBAN_AUTOMERGE_POLICY` file (`{"owner/repo": {"method": "squash", "hold_paths": ["drizzle/"]}}`) |
-| PR-body policy | `agent-hooks/pr-body-humanized.py` | Explicit harness hook registration |
 | Repository dependency bootstrap | `agent-hooks/kanban-worktree-deps.sh` | Repository supplies its own `scripts/worktree-deps.sh` |
 | Card-body gate | `agent-hooks/kanban-card-body-gate.sh` | Optional registration; migration does not enable it |
 | Block-claim auditing and weekly report | `agent-hooks/kanban-blocked-claim-audit.sh`, `scripts/claim-audit-weekly.py` | Shadow-only hook and home schedule |

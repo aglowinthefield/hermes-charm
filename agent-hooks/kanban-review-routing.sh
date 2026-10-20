@@ -1,8 +1,8 @@
 #!/bin/sh
 # Consolidated review gate: every review goes implementer -> reviewer -> operator, and an operator
-# handoff is allowed only when its exact PR head has passing CI. That allowed handoff then marks a
-# draft PR ready for review on the operator's behalf: the operator chose this gate as the moment
-# the PR reaches them. No agent marks a PR ready or merges by its own call. A repo listed in the
+# handoff is allowed only when its exact PR head has passing CI and is already ready.
+# The implementer requests review by marking its own completed PR ready. This hook does not
+# mutate readiness or treat AI approval as readiness. A repo listed in the
 # operator's auto-merge policy (KANBAN_AUTOMERGE_POLICY) also gets GitHub auto-merge here.
 #
 # kanban_request_review: a reviewer is required. Other workers must name the reviewer profile.
@@ -106,8 +106,7 @@ esac
 
 # This is now a valid reviewer -> operator handoff. No-code cards need an explicit receipt;
 # code cards need an exact PR URL and passing checks at its current head. Skipped checks count
-# as passing, matching GitHub's treatment of optional jobs. The only GitHub write is the final
-# `gh pr ready`, after every check above has passed.
+# as passing, matching GitHub's treatment of optional jobs. Readiness is checked, not changed.
 PR=$(field .tool_input.metadata.published_pr)
 if [ -z "$PR" ]; then
   [ "$(field .tool_input.metadata.no_pr)" = "true" ] && exit 0
@@ -155,8 +154,7 @@ if [ -n "$POLICY" ]; then
 fi
 
 if [ "$(printf '%s' "$PR_JSON" | jq -r '.isDraft')" = "true" ]; then
-  $GH pr ready "$PR" >/dev/null 2>&1 || \
-    block "Human-review handoff blocked: CI is green but could not mark $PR ready for review with gh. Retry."
+  block "Human-review handoff blocked: $PR is still draft. Return it to its implementer to complete the missing work and request review by marking their own PR ready."
 fi
 # The card still parks on the operator; the router completes it once GitHub merges. A merge
 # that cannot be enabled is explained on the PR instead of blocking the approved handoff.

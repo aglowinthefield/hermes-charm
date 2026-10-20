@@ -137,7 +137,14 @@ def unwrap(seg: list[str]) -> list[str]:
 
 
 def resolve(base: str, path: str) -> str:
+    if sys.platform == "win32":  # Git Bash spells C:\x as /c/x
+        path = re.sub(r"^/([A-Za-z])(?=/|$)", r"\1:", path)
     return os.path.normpath(os.path.join(base, os.path.expanduser(path)))
+
+
+def comparable(path: str) -> str:
+    """Resolved, case-folded where the filesystem is, and with `/` separators on every OS."""
+    return os.path.normcase(os.path.realpath(path)).replace("\\", "/")
 
 
 def git_target(args: list[str], cwd: str) -> str | None:
@@ -225,7 +232,8 @@ def open_cards() -> list[dict]:
             try:
                 rows = conn.execute(
                     "SELECT id, assignee, status, workspace_path, worker_pid FROM tasks "
-                    "WHERE workspace_kind = 'worktree' AND workspace_path LIKE '%/.worktrees/%' "
+                    "WHERE workspace_kind = 'worktree' "
+                    "AND REPLACE(workspace_path, '\\', '/') LIKE '%/.worktrees/%' "
                     "AND status NOT IN (?, ?)", FINISHED,
                 ).fetchall()
             finally:
@@ -248,8 +256,39 @@ def dispatch_profiles() -> set[str] | None:
     return names or None
 
 
+def windows_parents() -> dict[int, int]:
+    """pid -> parent pid for every process, from a Toolhelp snapshot (no /proc or ps)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Entry(ctypes.Structure):
+        _fields_ = [("size", wintypes.DWORD), ("usage", wintypes.DWORD), ("pid", wintypes.DWORD),
+                    ("heap", ctypes.c_void_p), ("module", wintypes.DWORD), ("threads", wintypes.DWORD),
+                    ("ppid", wintypes.DWORD), ("priority", ctypes.c_long), ("flags", wintypes.DWORD),
+                    ("exe", ctypes.c_char * 260)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    entry, parents = Entry(size=ctypes.sizeof(Entry)), {}
+    try:
+        more = kernel32.Process32First(snapshot, ctypes.byref(entry))
+        while more:
+            parents[entry.pid] = entry.ppid
+            more = kernel32.Process32Next(snapshot, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snapshot)
+    return parents
+
+
 def ancestors() -> set[int]:
     pids, pid = set(), os.getpid()
+    if sys.platform == "win32":
+        parents = windows_parents()
+        while pid and pid not in pids:
+            pids.add(pid)
+            pid = parents.get(pid, 0)
+        return pids
     while pid > 1 and pid not in pids:
         pids.add(pid)
         try:
@@ -269,11 +308,11 @@ def inside(target: str, root: str) -> bool:
 
 
 def blocking_claims(targets: list[str]) -> list[dict]:
-    targets = [os.path.realpath(t) for t in targets]
+    targets = [comparable(t) for t in targets]
     if not any("/.worktrees/" in t + "/" for t in targets):
         return []
     hits = [c for c in open_cards()
-            if any(inside(t, os.path.realpath(c["path"])) for t in targets)]
+            if any(inside(t, comparable(c["path"])) for t in targets)]
     if not hits:
         return []
     profiles = dispatch_profiles()
@@ -320,7 +359,8 @@ def main() -> int:
     targets, unparsed_write = tool_targets(tool, tool_input, cwd)
     if unparsed_write:  # cannot tell which commands write: judge every worktree the text names
         cmd = str(tool_input.get("command") or "")
-        targets += re.findall(r"(/[^\s'\";&|()]*?/\.worktrees/[^\s'\";&|()/]+)", cmd)
+        targets += [resolve(cwd, p) for p in re.findall(
+            r"((?:[A-Za-z]:)?[/\\][^\s'\";&|()]*?[/\\]\.worktrees[/\\][^\s'\";&|()/\\]+)", cmd)]
     elif not targets:
         return 0
     claims = blocking_claims(targets)

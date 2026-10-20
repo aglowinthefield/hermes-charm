@@ -35,9 +35,6 @@ class ShellHookTests(unittest.TestCase):
         self.assertNotIn("FAIL", result.stdout)
 
 
-    def test_pr_body_humanized(self):
-        self.run_shell_test("test-pr-body-humanized.sh")
-
     def test_worktree_deps(self):
         self.run_shell_test("test-kanban-worktree-deps.sh")
 
