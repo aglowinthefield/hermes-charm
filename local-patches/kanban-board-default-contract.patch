@@ -1,0 +1,33 @@
+diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
+index 7db9dd1..0870bd4 100644
+--- a/hermes_cli/kanban_db.py
++++ b/hermes_cli/kanban_db.py
+@@ -1242,6 +1242,10 @@ def create_task(
+     from hermes_cli.kanban_db_graph import initial_task_state, inherit_creator_origin
+     from hermes_cli.kanban_pr_acceptance import validate_contract
+ 
++    # A board may declare ``default_completion_contract`` in board.json so cards
++    # created without one are still reconciled against their merged PR.
++    if completion_contract is None:
++        completion_contract = _board_meta_for(board).get("default_completion_contract")
+     completion_contract = validate_contract(completion_contract)
+     model_override, provider_override = _validate_model_override(model_override, provider_override)
+     reasoning_effort = normalize_reasoning_effort(reasoning_effort)
+diff --git a/tests/hermes_cli/test_kanban_pr_acceptance.py b/tests/hermes_cli/test_kanban_pr_acceptance.py
+index 5e80199..ad2b84f 100644
+--- a/tests/hermes_cli/test_kanban_pr_acceptance.py
++++ b/tests/hermes_cli/test_kanban_pr_acceptance.py
+@@ -319,3 +319,13 @@ def test_prior_receipt_does_not_override_explicit_evidence(github, source, value
+             metadata = None
+         assert kb.complete_task(conn, tid, summary="Approved", metadata=metadata) is (value == "omitted")
+         assert (kb.get_task(conn, tid).status == "done") is (value == "omitted")
++
++
++def test_board_default_contract_applies_only_when_none_is_given():
++    path = kb.board_metadata_path("default")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps({"default_completion_contract": "acme/repo"}))
++    with connect() as conn:
++        assert kb.get_task(conn, kb.create_task(conn, title="inherits")).completion_contract == "acme/repo"
++        explicit = kb.create_task(conn, title="explicit", completion_contract="local-only")
++        assert kb.get_task(conn, explicit).completion_contract == "local-only"

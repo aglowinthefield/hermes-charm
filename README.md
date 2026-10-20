@@ -21,6 +21,7 @@ A merge is a reason to review retirement, not permission to silently remove a pa
 | Toggle | What it changes | Upstream / maintenance |
 | --- | --- | --- |
 | `kanban-review-complete-action` | Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it. | Local dashboard affordance; the backend already permits review-to-done completion. |
+| `kanban-board-default-contract` | Cards created without a completion contract take the board's `default_completion_contract` from board.json instead of `local-only`, so merged-review sync can close them. | Local; no upstream PR. Set the key per board in board.json; an explicit contract still wins. |
 | `memory-runtime-notices` | Skip memory sync and recall for background-process and subagent completion turns, and strip reaction notes, so memory providers only see what the user wrote. | Reuses the session timeline's synthetic-prompt pattern. No upstream PR yet. |
 
 ### Temporary fixes awaiting upstream merges

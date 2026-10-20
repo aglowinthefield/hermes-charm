@@ -11,5 +11,6 @@
   "kanban-branch-name-punctuation": "5c37b509ba4d8e25ad2659fd5d41dc283dae67332ce43eb75be46bc082a651ca",
   "kanban-rate-limit-backoff": "edfa1eeeb1e1022739d441b0214f6df00a80df521df9aec6bd9ec819f30afa8e",
   "kanban-superseded-check-runs": "63f8e9f0049189de0d021dd4481e0296729ae048c17b65098e8e564b9aadcd58",
-  "memory-runtime-notices": "466f96b8e4657ee7542ae6ecdcb15f37d10d9ed2b1e932fbe11d95f2fc0ac60c"
+  "memory-runtime-notices": "466f96b8e4657ee7542ae6ecdcb15f37d10d9ed2b1e932fbe11d95f2fc0ac60c",
+  "kanban-board-default-contract": "c20cc7b217bebbedeb2a5ca8ea787960a8f020d563e2ceead82695333d657055"
 }

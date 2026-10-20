@@ -211,6 +211,15 @@
       "note": "Local dashboard affordance; the backend already permits review-to-done completion."
     },
     {
+      "id": "kanban-board-default-contract",
+      "title": "Board default completion contract",
+      "summary": "Cards created without a completion contract take the board's `default_completion_contract` from board.json instead of `local-only`, so merged-review sync can close them.",
+      "default_enabled": true,
+      "maintenance": "homebrew",
+      "sources": [],
+      "note": "Local; no upstream PR. Set the key per board in board.json; an explicit contract still wins."
+    },
+    {
       "id": "memory-runtime-notices",
       "title": "Keep runtime notices out of memory",
       "summary": "Skip memory sync and recall for background-process and subagent completion turns, and strip reaction notes, so memory providers only see what the user wrote.",
