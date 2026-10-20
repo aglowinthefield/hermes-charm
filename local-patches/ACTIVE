@@ -15,4 +15,5 @@ kanban-superseded-check-runs
 kanban-merged-review-sync
 kanban-worktree-teardown
 kanban-review-complete-action
+kanban-board-default-contract
 memory-runtime-notices

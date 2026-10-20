@@ -53,6 +53,10 @@ config_schema:
     type: bool
     default: true
     description: "Review completion action. Expose the existing Complete action for cards in Review so a human reviewer can finish an approved card without reassigning it. Requires explicit apply and backend restart."
+  kanban-board-default-contract:
+    type: bool
+    default: true
+    description: "Board default completion contract. Cards created without a completion contract take the board's `default_completion_contract` from board.json instead of `local-only`, so merged-review sync can close them. Requires explicit apply and backend restart."
   memory-runtime-notices:
     type: bool
     default: true
