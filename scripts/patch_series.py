@@ -9,6 +9,9 @@ rebase   Same walk, but a patch that no longer applies is retried with
          is given. A real conflict stops the walk and keeps the clone for a
          hand port (exit 2).
 
+Both then require every patch to still reverse-apply on the finished tree, as the
+installer does; a later patch that rewrites an earlier one's lines is `overlapped`.
+
 --tests runs every test file the bundle carries in the resulting tree.
 
 Neither command writes to the agent checkout or its repository, and neither
@@ -123,6 +126,14 @@ def walk(agent, ref, directory, rebase=False, keep=False):
                                         '--dst-prefix=b/', base, after).stdout
             base = after
             results.append(row)
+        if not failed:
+            # local_patches refuses a bundle whose applied patches no longer reverse one by
+            # one, since each toggle must stay removable; catch that here, before release.
+            for row, (name, data) in zip(results, patches):
+                if git(tree, 'apply', '--check', '--reverse', input_data=regenerated.get(name, data),
+                       check=False).returncode:
+                    row['state'] = 'overlapped'
+                    failed = True
         return {'ref': git(tree, 'rev-parse', 'HEAD').stdout.decode().strip(), 'ok': not failed,
                 'patches': results, 'clone': str(tree) if keep else None}, regenerated, tree
     except BaseException:
