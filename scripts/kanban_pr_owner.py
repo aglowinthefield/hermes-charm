@@ -49,6 +49,15 @@ def owning_card(db: Path, pr: dict) -> sqlite3.Row | None:
     return cards[0]
 
 
+def owning_card_on(dbs: dict[str, Path], pr: dict) -> tuple[str, sqlite3.Row] | None:
+    """`owning_card` across boards, as (board, card). Open cards win, then the newest."""
+    found = [(board, card) for board, db in dbs.items()
+             if db.exists() and (card := owning_card(db, pr)) is not None]
+    if not found:
+        return None
+    return max(found, key=lambda pair: (pair[1]["status"] in OPEN, pair[1]["created_at"] or 0))
+
+
 def implementer_of(db: Path, task_id: str, park_assignee: str) -> str | None:
     """Who built the card: the implementer on its latest handoff into AI review.
 

@@ -21,6 +21,10 @@ MAX_SENDS=$(python3 "$SETTINGS" review-notifications max_sends)
 BOARD="${KANBAN_REVIEW_BOARD:-$CONFIG_BOARD}"
 PARKING_ASSIGNEE="${KANBAN_REVIEW_PARKING_ASSIGNEE:-$CONFIG_ASSIGNEE}"
 TARGET="${KANBAN_REVIEW_NOTIFY_TARGET:-$CONFIG_TARGET}"
+set --
+if [ -n "${KANBAN_REVIEW_NOTIFY_PROFILE:-}" ]; then
+  set -- -p "$KANBAN_REVIEW_NOTIFY_PROFILE"
+fi
 HOME_DIR="${HERMES_HOME:-$CONFIG_HOME}"
 export HERMES_HOME="$HOME_DIR"
 DB="$HOME_DIR/kanban/boards/$BOARD/kanban.db"
@@ -79,7 +83,7 @@ $pr"
 $summary"
   # perl's alarm, not coreutils timeout: the gateway's PATH is not guaranteed to have it.
   /usr/bin/perl -e 'alarm shift; exec @ARGV' "$SEND_TIMEOUT" \
-    hermes send -q -t "$TARGET" -s "🟣 Ready for your review" "$msg" >/dev/null 2>&1 || break
+    hermes "$@" send -q -t "$TARGET" -s "🟣 Ready for your review" "$msg" >/dev/null 2>&1 || break
   SENT=$((SENT + 1))
   [ "$eid" -gt "$MAX_ID" ] && MAX_ID="$eid"
   printf '%s' "$MAX_ID" >"$STATE"

@@ -85,18 +85,22 @@ class TrunkQueueSweepTests(unittest.TestCase):
         self.dir = Path(temp.name)
         self.db = self.dir / "kanban.db"
         self.state = self.dir / "state.json"
-        with closing(sqlite3.connect(self.db)) as conn:
-            conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, assignee TEXT, status TEXT,"
-                         " branch_name TEXT, claim_lock TEXT, created_at INTEGER)")
-            conn.execute("CREATE TABLE task_runs (id INTEGER PRIMARY KEY, task_id TEXT, metadata TEXT)")
-            conn.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, kind TEXT,"
-                         " payload TEXT, created_at INTEGER)")
-            conn.commit()
+        # A second board for the same repository, as domain routing creates.
+        self.domain_db = self.dir / "domain" / "kanban.db"
+        self.domain_db.parent.mkdir()
+        for db in (self.db, self.domain_db):
+            with closing(sqlite3.connect(db)) as conn:
+                conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, assignee TEXT, status TEXT,"
+                             " branch_name TEXT, claim_lock TEXT, created_at INTEGER)")
+                conn.execute("CREATE TABLE task_runs (id INTEGER PRIMARY KEY, task_id TEXT, metadata TEXT)")
+                conn.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, kind TEXT,"
+                             " payload TEXT, created_at INTEGER)")
+                conn.commit()
         self.settings = {"repo": REPO, "board": "example", "park_assignee": "operator"}
 
     def card(self, task_id, status, assignee="operator", branch=None, claim=None,
-             handoffs=(("builder", "auditor"), ("auditor", "operator"))):
-        with closing(sqlite3.connect(self.db)) as conn:
+             handoffs=(("builder", "auditor"), ("auditor", "operator")), db=None):
+        with closing(sqlite3.connect(db or self.db)) as conn:
             conn.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, 1)",
                          (task_id, "title", assignee, status, branch, claim))
             for at, (implementer, reviewer) in enumerate(handoffs):
@@ -106,7 +110,17 @@ class TrunkQueueSweepTests(unittest.TestCase):
             conn.commit()
 
     def tick(self, fake):
-        return sweep.run(self.settings, self.db, self.state, fake.cmd, fake.trunk)
+        return sweep.run(self.settings, {"example": self.db, "example-domain": self.domain_db},
+                         self.state, fake.cmd, fake.trunk)
+
+    def test_card_on_another_board_for_the_repo_is_reopened_on_that_board(self):
+        self.card("t_domain", "review", branch="b1", db=self.domain_db)
+        fake = Fake([pr(7, "b1")], {7: failed()})
+        report = self.tick(fake)
+        self.assertEqual([("comment", "t_domain"), ("reopen-review", "t_domain"), ("reassign", "t_domain")],
+                         fake.actions())
+        self.assertEqual({"example-domain"}, {argv[3] for argv in fake.writes})
+        self.assertIn("reopened t_domain", report)
 
     def test_failed_queue_run_reopens_parked_card_for_its_implementer_once(self):
         self.card("t_one", "review", branch="b1")

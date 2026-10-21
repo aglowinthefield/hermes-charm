@@ -81,13 +81,17 @@ class SweepTests(unittest.TestCase):
         self.dir = Path(temp.name)
         self.db = self.dir / "kanban.db"
         self.state = self.dir / "state.json"
-        with closing(sqlite3.connect(self.db)) as conn:
-            conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, assignee TEXT, status TEXT,"
-                         " branch_name TEXT, claim_lock TEXT, created_at INTEGER)")
-            conn.execute("CREATE TABLE task_runs (id INTEGER PRIMARY KEY, task_id TEXT, metadata TEXT)")
-            conn.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, kind TEXT,"
-                         " payload TEXT, created_at INTEGER)")
-            conn.commit()
+        # A second board for the same repository, as domain routing creates.
+        self.domain_db = self.dir / "domain" / "kanban.db"
+        self.domain_db.parent.mkdir()
+        for db in (self.db, self.domain_db):
+            with closing(sqlite3.connect(db)) as conn:
+                conn.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, assignee TEXT, status TEXT,"
+                             " branch_name TEXT, claim_lock TEXT, created_at INTEGER)")
+                conn.execute("CREATE TABLE task_runs (id INTEGER PRIMARY KEY, task_id TEXT, metadata TEXT)")
+                conn.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, kind TEXT,"
+                             " payload TEXT, created_at INTEGER)")
+                conn.commit()
         self.settings = {"repo": REPO, "board": "example", "park_assignee": "operator",
                          "collector": "/abs/collect.py", "adopt_assignee": "builder"}
 
@@ -110,10 +114,10 @@ class SweepTests(unittest.TestCase):
         return self.git("rev-parse", "HEAD")
 
     def card(self, task_id, status, assignee="operator", branch=None, claim=None, published=None,
-             handoffs=(("builder", "auditor"), ("auditor", "operator"))):
-        with closing(sqlite3.connect(self.db)) as conn:
-            conn.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, 1)",
-                         (task_id, "title", assignee, status, branch, claim))
+             handoffs=(("builder", "auditor"), ("auditor", "operator")), db=None, created=1):
+        with closing(sqlite3.connect(db or self.db)) as conn:
+            conn.execute("INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         (task_id, "title", assignee, status, branch, claim, created))
             for at, (implementer, reviewer) in enumerate(handoffs):
                 conn.execute("INSERT INTO task_events (task_id, kind, payload, created_at) VALUES (?, ?, ?, ?)",
                              (task_id, "review_requested",
@@ -124,7 +128,26 @@ class SweepTests(unittest.TestCase):
             conn.commit()
 
     def tick(self, fake):
-        return sweep.run(self.settings, self.db, self.state, fake)
+        return sweep.run(self.settings, {"example": self.db, "example-domain": self.domain_db},
+                         self.state, fake)
+
+    def test_card_on_another_board_for_the_repo_is_reopened_on_that_board(self):
+        self.card("t_domain", "review", branch="wt/t_domain", db=self.domain_db)
+        fake = FakeCommands([pr(7, "wt/t_domain")])
+        report = self.tick(fake)
+        self.assertEqual([("comment", "t_domain"), ("reopen-review", "t_domain"), ("reassign", "t_domain")],
+                         fake.actions())
+        self.assertEqual({"example-domain"}, {argv[3] for argv in fake.writes})  # never adopted on the default board
+        self.assertEqual(["builder", "--reclaim"], fake.writes[2][6:8])
+        self.assertIn("reopened t_domain", report)
+
+    def test_open_card_on_another_board_wins_over_a_finished_one(self):
+        self.card("t_old", "done", branch="wt/shared", created=5)
+        self.card("t_live", "review", branch="wt/shared", db=self.domain_db, created=1)
+        fake = FakeCommands([pr(7, "wt/shared")])
+        self.tick(fake)
+        self.assertEqual(("reopen-review", "t_live"), fake.actions()[1])
+        self.assertEqual("example-domain", fake.writes[1][3])
 
     def test_parked_review_card_is_reopened_once_per_head(self):
         self.card("t_one", "review", branch="wt/t_one")

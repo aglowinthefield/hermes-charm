@@ -1,6 +1,6 @@
 #!/bin/sh
 # Consolidated review gate: every review goes implementer -> reviewer -> operator, and an operator
-# handoff is allowed only when its exact PR head has passing CI and is already ready.
+# handoff requires an open, ready PR with a resolved head. CI runs asynchronously.
 # The implementer requests review by marking its own completed PR ready. This hook does not
 # mutate readiness or treat AI approval as readiness. A repo listed in the
 # operator's auto-merge policy (KANBAN_AUTOMERGE_POLICY) also gets GitHub auto-merge here.
@@ -105,12 +105,12 @@ case "$(run_kind)" in
 esac
 
 # This is now a valid reviewer -> operator handoff. No-code cards need an explicit receipt;
-# code cards need an exact PR URL and passing checks at its current head. Skipped checks count
-# as passing, matching GitHub's treatment of optional jobs. Readiness is checked, not changed.
+# code cards need an exact PR URL and an open, ready PR. CI does not gate handoff.
+# Readiness is checked, not changed; merge-time CI requirements remain in force.
 PR=$(field .tool_input.metadata.published_pr)
 if [ -z "$PR" ]; then
   [ "$(field .tool_input.metadata.no_pr)" = "true" ] && exit 0
-  block "Human-review handoff blocked: metadata.published_pr is required. Retry kanban_request_review(reviewer=\"$OPERATOR\", metadata={\"published_pr\":\"https://github.com/OWNER/REPO/pull/N\"}) after CI passes. If the card changed no code and has no PR, pass metadata={\"no_pr\": true} instead."
+  block "Human-review handoff blocked: metadata.published_pr is required. Retry kanban_request_review(reviewer=\"$OPERATOR\", metadata={\"published_pr\":\"https://github.com/OWNER/REPO/pull/N\"}). If the card changed no code and has no PR, pass metadata={\"no_pr\": true} instead."
 fi
 printf '%s' "$PR" | grep -Eq '^https://github\.com/[^/]+/[^/]+/pull/[0-9]+/?$' || \
   block "Human-review handoff blocked: metadata.published_pr must be an exact GitHub pull-request URL."
@@ -121,15 +121,6 @@ STATE=$(printf '%s' "$PR_JSON" | jq -r '.state // ""')
 HEAD=$(printf '%s' "$PR_JSON" | jq -r '.headRefOid // ""')
 [ "$STATE" = "OPEN" ] || block "Human-review handoff blocked: $PR is $STATE, not OPEN."
 [ -n "$HEAD" ] || block "Human-review handoff blocked: could not resolve current PR head SHA for $PR."
-
-CHECKS=$($GH pr checks "$PR" --json name,state,bucket,workflow,link 2>/dev/null) || \
-  block "Human-review handoff blocked: could not read CI checks for $PR at ${HEAD%????????????????????????????????}."
-COUNT=$(printf '%s' "$CHECKS" | jq 'length')
-[ "$COUNT" -gt 0 ] || block "Human-review handoff blocked: no CI checks are reported for $PR at ${HEAD%????????????????????????????????}. Wait for checks to start, then retry."
-
-NOT_PASSING=$(printf '%s' "$CHECKS" | jq -r '[.[] | select(.bucket != "pass" and .bucket != "skipping") | ((.workflow // "CI") + " / " + .name + " (" + (.state // .bucket // "unknown") + ")")] | join(", ")')
-[ -z "$NOT_PASSING" ] || \
-  block "Human-review handoff blocked: CI is not green for $PR at ${HEAD%????????????????????????????????}: $NOT_PASSING. Fix failures or wait for pending checks, then retry."
 
 # Auto-merge policy lives in the operator's Hermes home, never in the repo a PR could edit:
 # {"owner/repo": {"method": "squash", "hold_paths": ["drizzle/", "fly.toml"]}}. A hold path

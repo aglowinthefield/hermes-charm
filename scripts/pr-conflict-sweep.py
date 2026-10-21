@@ -9,8 +9,9 @@ So each tick, for every open PR the authenticated `gh` user authored in the conf
 
   1. Skip anything not CONFLICTING. UNKNOWN means GitHub has not computed mergeability yet;
      listing the PR asks it to, so the next tick sees the real value.
-  2. Find the owning card on the board: same branch name, or a run whose
-     `metadata.published_pr` is this PR's URL. Open cards win over finished ones.
+  2. Find the owning card on any board for the repository: same branch name, or a run whose
+     `metadata.published_pr` is this PR's URL. Open cards win over finished ones. Writes go to
+     the board that holds it; adoption cards go to the configured board.
   3. Card in `review`, parked on the human assignee, with no live claim: run the
      configured relevance collector first. RELEVANT or NEEDS_REWORK gets a card comment with
      the conflicting files and the rebase playbook, then `reopen-review` and a reassign to the
@@ -45,7 +46,7 @@ import subprocess
 import sys
 from typing import Callable
 
-from kanban_pr_owner import ADOPT_PREFIX, HUMAN_HELD, MOVING, adopt_branch, implementer_of, owning_card, pr_comment_argv
+from kanban_pr_owner import ADOPT_PREFIX, HUMAN_HELD, MOVING, adopt_branch, implementer_of, owning_card_on, pr_comment_argv
 
 Runner = Callable[[list[str]], "tuple[int, str, str]"]
 
@@ -203,13 +204,15 @@ def adopt(pr: dict, settings: dict, cmd: Runner, label: str) -> tuple[bool, str]
     return True, f"- {label}: no card owned it; adopted as {task} for {assignee} to merge main.{note}"
 
 
-def handle(pr: dict, settings: dict, db: Path, cmd: Runner) -> tuple[bool, str]:
+def handle(pr: dict, settings: dict, dbs: dict[str, Path], cmd: Runner) -> tuple[bool, str]:
     """Return (done, message). done=False leaves the PR unrecorded so the next tick retries."""
     number, label = pr["number"], f"#{pr['number']} ({pr['title'][:70]})"
-    card = owning_card(db, pr)
-    if card is None or (card["status"] in FINISHED
-                        and (card["branch_name"] or "").startswith(ADOPT_PREFIX)):
+    owner = owning_card_on(dbs, pr)
+    if owner is None or (owner[1]["status"] in FINISHED
+                         and (owner[1]["branch_name"] or "").startswith(ADOPT_PREFIX)):
         return adopt(pr, settings, cmd, label)
+    card_board, card = owner
+    db = dbs[card_board]
     status, task = card["status"], card["id"]
     if status in MOVING or (status == "review" and (card["assignee"] != settings["park_assignee"]
                                                      or card["claim_lock"])):
@@ -228,7 +231,7 @@ def handle(pr: dict, settings: dict, db: Path, cmd: Runner) -> tuple[bool, str]:
     if verdict not in ACTIONABLE_VERDICTS:
         return True, (f"- {label}: conflicting, but the relevance collector says {verdict}. Not reopened; "
                       f"close it or reopen {task} by hand.")
-    board = ["hermes", "kanban", "--board", settings["board"]]
+    board = ["hermes", "kanban", "--board", card_board]
     for argv in (board + ["comment", task, "--author", AUTHOR, rework_comment(pr, conflicts)],
                  board + ["reopen-review", task, "--reason", "PR conflicts with main"]):
         rc, _, err = cmd(argv)
@@ -250,7 +253,7 @@ def handle(pr: dict, settings: dict, db: Path, cmd: Runner) -> tuple[bool, str]:
     return True, f"- {label}: reopened {task} for {implementer} to rebase ({verdict}).{note}"
 
 
-def run(settings: dict, db: Path, state_path: Path, cmd: Runner) -> str:
+def run(settings: dict, dbs: dict[str, Path], state_path: Path, cmd: Runner) -> str:
     try:
         state = json.loads(state_path.read_text())
     except (OSError, ValueError):
@@ -264,7 +267,7 @@ def run(settings: dict, db: Path, state_path: Path, cmd: Runner) -> str:
         key = str(pr["number"])
         if state.get(key) == pr["headRefOid"]:
             continue
-        done, message = handle(pr, settings, db, cmd)
+        done, message = handle(pr, settings, dbs, cmd)
         if done:
             state[key] = pr["headRefOid"]
         if message:
@@ -280,7 +283,7 @@ def run(settings: dict, db: Path, state_path: Path, cmd: Runner) -> str:
 
 
 def main() -> int:
-    from deployment_settings import get, hermes_environment
+    from deployment_settings import get, hermes_environment, repo_boards
 
     home = Path(os.environ.get("HERMES_HOME") or get("pr-conflict-sweep", "home")).expanduser()
     settings = {key: get("pr-conflict-sweep", key)
@@ -310,7 +313,9 @@ def main() -> int:
                 return 0, json.dumps({"id": "t_dry_run"}) if "create" in argv else "", ""
             return real(argv)
 
-    report = run(settings, board_dir / "kanban.db", state, cmd)
+    dbs = {board: home / "kanban" / "boards" / board / "kanban.db"
+           for board in repo_boards(settings["board"], settings["repo"])}
+    report = run(settings, dbs, state, cmd)
     if report:
         print(report)
     return 0

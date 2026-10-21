@@ -12,7 +12,8 @@ authored in the configured repo:
      settle the blame. A failure older than the PR's head commit is stale: someone already
      pushed after it, so it is recorded and skipped.
   2. A failure the implementer can fix (a required check failed, or a merge conflict) whose
-     owning card is in `review`, parked on the human assignee with no live claim: comment the
+     owning card (on any board for the repository) is in `review`, parked on the human
+     assignee with no live claim: on that card's board, comment the
      failing checks or the conflicting PR, `reopen-review`, then reassign to the implementer
      from its last handoff into AI review, and comment on the PR, as pr-conflict-sweep does.
   3. Card already moving or under AI review: leave it, and look again once it parks.
@@ -38,7 +39,7 @@ from typing import Callable
 import urllib.error
 import urllib.request
 
-from kanban_pr_owner import MOVING, implementer_of, owning_card, pr_comment_argv
+from kanban_pr_owner import MOVING, implementer_of, owning_card_on, pr_comment_argv
 
 Runner = Callable[[list[str]], "tuple[int, str, str]"]
 TrunkLookup = Callable[[int], "dict | None"]
@@ -144,7 +145,7 @@ def rework_comment(pr: dict, failure: dict, test_pr: int | None) -> str:
     )
 
 
-def handle(pr: dict, failure: dict, test_pr: int | None, settings: dict, db: Path,
+def handle(pr: dict, failure: dict, test_pr: int | None, settings: dict, dbs: dict[str, Path],
            cmd: Runner) -> tuple[bool, str]:
     """Return (done, message). done=False leaves the entry unrecorded so the next tick retries."""
     label = f"#{pr['number']} ({pr['title'][:70]})"
@@ -152,9 +153,11 @@ def handle(pr: dict, failure: dict, test_pr: int | None, settings: dict, db: Pat
     if reason not in (CHECK_FAILED, CONFLICT):
         return True, (f"- {label}: failed out of the Trunk queue ({reason}). Not a code failure; "
                       f"requeue with `/trunk merge` once it clears.")
-    card = owning_card(db, pr)
-    if card is None:
+    owner = owning_card_on(dbs, pr)
+    if owner is None:
         return True, f"- {label}: failed out of the Trunk queue ({reason}), and no kanban card owns it."
+    card_board, card = owner
+    db = dbs[card_board]
     task, status = card["id"], card["status"]
     if status in MOVING or (status == "review" and (card["assignee"] != settings["park_assignee"]
                                                      or card["claim_lock"])):
@@ -166,7 +169,7 @@ def handle(pr: dict, failure: dict, test_pr: int | None, settings: dict, db: Pat
     if not implementer:
         return True, (f"- {label}: failed out of the Trunk queue ({reason}); owner card {task} has no "
                       f"implementer handoff on record. Route it by hand.")
-    board = ["hermes", "kanban", "--board", settings["board"]]
+    board = ["hermes", "kanban", "--board", card_board]
     for argv in (board + ["comment", task, "--author", AUTHOR, rework_comment(pr, failure, test_pr)],
                  board + ["reopen-review", task, "--reason", "PR failed out of the Trunk merge queue"]):
         rc, _, err = cmd(argv)
@@ -191,7 +194,7 @@ def handle(pr: dict, failure: dict, test_pr: int | None, settings: dict, db: Pat
     return True, f"- {label}: failed out of the Trunk queue ({reason}); reopened {task} for {implementer}.{note}"
 
 
-def run(settings: dict, db: Path, state_path: Path, cmd: Runner, trunk: TrunkLookup) -> str:
+def run(settings: dict, dbs: dict[str, Path], state_path: Path, cmd: Runner, trunk: TrunkLookup) -> str:
     try:
         state = json.loads(state_path.read_text())
     except (OSError, ValueError):
@@ -221,7 +224,7 @@ def run(settings: dict, db: Path, state_path: Path, cmd: Runner, trunk: TrunkLoo
         if failed_at and iso_order(pushed_at) > iso_order(failed_at):
             state[key] = entry.get("id")  # the branch moved on since the failure; nothing to route
             continue
-        done, message = handle(pr, failure, test_pr, settings, db, cmd)
+        done, message = handle(pr, failure, test_pr, settings, dbs, cmd)
         if done:
             state[key] = entry.get("id")
         if message:
@@ -237,7 +240,7 @@ def run(settings: dict, db: Path, state_path: Path, cmd: Runner, trunk: TrunkLoo
 
 
 def main() -> int:
-    from deployment_settings import get, hermes_environment
+    from deployment_settings import get, hermes_environment, repo_boards
 
     home = Path(os.environ.get("HERMES_HOME") or get("trunk-queue-sweep", "home")).expanduser()
     settings = {key: get("trunk-queue-sweep", key)
@@ -271,7 +274,9 @@ def main() -> int:
                 return 0, "", ""
             return real(argv)
 
-    report = run(settings, board_dir / "kanban.db", state, cmd,
+    dbs = {board: home / "kanban" / "boards" / board / "kanban.db"
+           for board in repo_boards(settings["board"], settings["repo"])}
+    report = run(settings, dbs, state, cmd,
                  trunk_client(token, settings["repo"], settings["target_branch"]))
     if report:
         print(report)

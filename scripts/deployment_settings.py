@@ -21,12 +21,15 @@ class ConfigurationError(ValueError):
 _INTEGER_KEYS = {"daily_card_cap", "net_fails_before_alert", "log_excerpt_cap",
                  "send_timeout", "max_sends"}
 _LIST_KEYS = {"watched_workflows", "deploy_workflows", "hold_labels"}
-_MAP_KEYS = {"team_to_board", "contract_by_board"}
+_MAP_KEYS = {"team_to_board", "contract_by_board", "label_to_board", "lead_by_board"}
 _SECTIONS = {"linear-intake", "ci-watchdog", "review-notifications", "pr-conflict-sweep",
              "trunk-queue-sweep", "kanban-incident-watch"}
 
 
-def get(section: str, key: str) -> Any:
+_REQUIRED = object()
+
+
+def get(section: str, key: str, default: Any = _REQUIRED) -> Any:
     """Return a required setting, refusing absent files, keys and invalid types."""
     filename = os.environ.get("HERMES_DEPLOYMENT_CONFIG", "").strip()
     if not filename:
@@ -41,7 +44,11 @@ def get(section: str, key: str) -> Any:
     if section not in _SECTIONS:
         raise ConfigurationError(f"Unknown deployment section {section!r}")
     values = config.get(section)
-    if not isinstance(values, dict) or key not in values:
+    if not isinstance(values, dict):
+        raise ConfigurationError(f"Deployment config {path} requires {section}.{key}")
+    if key not in values:
+        if default is not _REQUIRED:
+            return default
         raise ConfigurationError(f"Deployment config {path} requires {section}.{key}")
     value = values[key]
     if key in _INTEGER_KEYS:
@@ -59,6 +66,19 @@ def get(section: str, key: str) -> Any:
     if key in {'home', 'collector'} and isinstance(value, str):
         return str(Path(value).expanduser().resolve())
     return value
+
+
+def repo_boards(primary: str, repo: str) -> list[str]:
+    """`primary` first, then every other board linear-intake maps to the same repository.
+
+    Domain routing spreads one repository's cards across boards, so a job that looks a card up
+    by PR or idempotency key has to search all of them. Without intake maps, only `primary`."""
+    try:
+        contracts = get("linear-intake", "contract_by_board", {})
+    except ConfigurationError:
+        contracts = {}
+    return [primary, *sorted(board for board, owner in contracts.items()
+                             if board != primary and owner == repo)]
 
 
 def hermes_environment(home: Path) -> dict[str, str]:

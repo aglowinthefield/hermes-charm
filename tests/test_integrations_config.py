@@ -183,6 +183,35 @@ class SettingsTests(unittest.TestCase):
                 self.assertIn("before starting", body)
                 self.assertNotIn("linear", body.lower())
 
+    def test_ci_card_on_an_earlier_board_for_the_repo_blocks_a_duplicate(self):
+        config = fixture(self.home)
+        config["linear-intake"]["contract_by_board"]["example-infra"] = "example/repo"
+        config["ci-watchdog"]["board"] = "example-infra"
+        self.config.write_text(json.dumps(config))
+        db = self.home / "kanban/boards/example/kanban.db"
+        db.parent.mkdir(parents=True)
+        import sqlite3
+        with sqlite3.connect(db) as conn:
+            conn.execute("CREATE TABLE tasks (id TEXT, status TEXT, created_by TEXT, idempotency_key TEXT)")
+            conn.execute("INSERT INTO tasks VALUES ('t_old', 'ready', 'ci-watchdog', ?)",
+                         ("ci-failure/Tests/" + "a" * 12,))
+        module = self.load("ci-watchdog.py")
+        self.assertEqual(module.COVER_BOARDS, ["example-infra", "example"])
+        module.save_state({"shadow": False, "seen": []})
+        failed = {"databaseId": 1, "workflowName": "Tests", "conclusion": "failure",
+                  "headSha": "a" * 40, "createdAt": "2026-01-01T00:00:00Z",
+                  "url": "https://example.test/run/1", "displayTitle": "Test commit"}
+        calls = []
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            stdout = json.dumps([failed]) if command[:3] == ["gh", "run", "list"] else ""
+            return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+        out = io.StringIO()
+        with patch.object(module.subprocess, "run", side_effect=fake_run), redirect_stdout(out):
+            self.assertEqual(module.main(), 0)
+        self.assertFalse([c for c in calls if "create" in c])
+        self.assertIn("already covered by example/t_old", out.getvalue())
+
     def test_ci_live_write_path_is_mocked_and_state_is_isolated(self):
         self.config.write_text(json.dumps(fixture(self.home)))
         module = self.load("ci-watchdog.py")
