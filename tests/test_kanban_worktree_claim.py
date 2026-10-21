@@ -108,6 +108,36 @@ class WorktreeClaimHookTests(unittest.TestCase):
         self.board([("t_abc123", "t", "scribe", "running", str(self.wt), self.stranger.pid)])
         self.assertBlocked(self.terminal(f"cd {self.wt.as_posix()} && git push"))
 
+    def bind(self, current_run, bound, name="acme"):
+        """Give t_abc123 run tracking: ``current_run`` on the card, ``bound`` (run_id, pid) events."""
+        with closing(sqlite3.connect(self.boards / name / "kanban.db")) as conn:
+            conn.execute("ALTER TABLE tasks ADD COLUMN current_run_id INTEGER")
+            conn.execute("UPDATE tasks SET current_run_id = ? WHERE id = 't_abc123'", (current_run,))
+            conn.execute("CREATE TABLE task_events (id INTEGER PRIMARY KEY, task_id TEXT, run_id INTEGER, "
+                         "kind TEXT, payload TEXT, created_at INTEGER)")
+            conn.executemany(
+                "INSERT INTO task_events (task_id, run_id, kind, payload, created_at) VALUES (?, ?, ?, ?, 0)",
+                [("t_abc123", run, "worker_bound", json.dumps({"pid": pid, "claim_lock": "h:1"}))
+                 for run, pid in bound],
+            )
+            conn.commit()
+
+    def test_owner_bound_worker_beside_the_spawned_client_is_allowed(self):
+        # Owner-routed dispatch: worker_pid is the spawned client, a sibling of the agent's interpreter.
+        self.board([("t_abc123", "t", "scribe", "running", str(self.wt), self.stranger.pid)])
+        self.bind(7, [(7, os.getpid())])
+        self.assertAllowed(self.terminal(f"cd {self.wt.as_posix()} && git rebase origin/main && git push"))
+
+    def test_a_pid_bound_to_an_earlier_run_does_not_admit_this_session(self):
+        self.board([("t_abc123", "t", "scribe", "running", str(self.wt), self.stranger.pid)])
+        self.bind(8, [(7, os.getpid()), (8, self.stranger.pid)])
+        self.assertBlocked(self.terminal(f"cd {self.wt.as_posix()} && git push"))
+
+    def test_a_held_card_with_no_current_run_still_blocks(self):
+        self.board([("t_abc123", "t", "scribe", "blocked", str(self.wt), None)])
+        self.bind(None, [(7, os.getpid())])
+        self.assertBlocked(self.terminal(f"cd {self.wt.as_posix()} && git push"))
+
     def test_read_only_git_is_allowed(self):
         self.assertAllowed(self.terminal(
             f"cd {self.wt.as_posix()} && git status --short && git log --oneline -3 && git diff origin/main"))

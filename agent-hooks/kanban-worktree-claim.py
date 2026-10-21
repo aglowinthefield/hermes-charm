@@ -12,7 +12,10 @@ land inside the worktree of a card that:
   - is on a board under the kanban root and not done or archived,
   - has a `.worktrees/` workspace path (cards whose workspace is the repo root claim nothing),
   - is assigned to a profile in `kanban.dispatch_profiles`,
-  - and whose recorded worker is not this process or one of its ancestors.
+  - and whose worker is not this process or one of its ancestors. The worker is the run's
+    spawned pid (`tasks.worker_pid`) or the interpreter the profile owner bound to the run
+    (`worker_bound` events for `tasks.current_run_id`): in owner-routed dispatch the agent runs
+    in that bound interpreter, a sibling of the spawned client, not one of its descendants.
 The card's own worker passes. To work the card by hand, reassign it to a profile the
 dispatcher cannot claim (`default`) with --reclaim first; the block reason prints the command.
 Reads (git status/log/diff, gh pr view/checks) always pass.
@@ -222,6 +225,33 @@ def boards_dir() -> Path:
     return home / "kanban" / "boards"
 
 
+def bound_workers(conn: sqlite3.Connection, task_ids: list[str]) -> dict[str, set[int]]:
+    """task id -> pids the owner bound to the card's current run (`worker_bound` events).
+
+    Only the current run counts, so a pid from an ended attempt never admits a later process
+    that reuses it. Boards without run tracking have no such events and give an empty map."""
+    if not task_ids:
+        return {}
+    marks = ",".join("?" * len(task_ids))
+    try:
+        rows = conn.execute(
+            "SELECT e.task_id, e.payload FROM task_events e JOIN tasks t ON t.id = e.task_id "
+            f"WHERE e.kind = 'worker_bound' AND e.run_id = t.current_run_id AND t.id IN ({marks})",
+            task_ids,
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    bound: dict[str, set[int]] = {}
+    for task_id, payload in rows:
+        try:
+            pid = json.loads(payload or "{}").get("pid")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(pid, int) and pid > 0:
+            bound.setdefault(task_id, set()).add(pid)
+    return bound
+
+
 def open_cards() -> list[dict]:
     cards = []
     for db in sorted(boards_dir().glob("*/kanban.db")):
@@ -236,13 +266,15 @@ def open_cards() -> list[dict]:
                     "AND REPLACE(workspace_path, '\\', '/') LIKE '%/.worktrees/%' "
                     "AND status NOT IN (?, ?)", FINISHED,
                 ).fetchall()
+                bound = bound_workers(conn, [row[0] for row in rows])
             finally:
                 conn.close()
         except sqlite3.Error:
             continue  # one unreadable board must not hide claims on the others
         for task_id, assignee, status, path, pid in rows:
+            pids = bound.get(task_id, set()) | ({pid} if pid else set())
             cards.append({"board": db.parent.name, "id": task_id, "assignee": assignee or "",
-                          "status": status, "path": os.path.normpath(path), "pid": pid})
+                          "status": status, "path": os.path.normpath(path), "pids": pids})
     return cards
 
 
@@ -321,7 +353,7 @@ def blocking_claims(targets: list[str]) -> list[dict]:
     for card in hits:
         dispatchable = (card["assignee"] in profiles if profiles is not None
                         else card["assignee"] not in FALLBACK_NON_DISPATCHABLE)
-        if dispatchable and card["pid"] not in mine:
+        if dispatchable and not card["pids"] & mine:
             claims.append(card)
     return claims
 
