@@ -98,6 +98,21 @@ class PatchSeriesTests(unittest.TestCase):
         self.assertNotIn('tests', report, 'a stale bundle never reaches the test run')
         self.assertEqual(self.leftovers(), [], 'only a conflict keeps its clone')
 
+    def test_verify_fails_when_a_later_patch_invalidates_an_earlier_one(self):
+        # The installer refuses a bundle whose applied patches no longer reverse one by
+        # one (each toggle must stay removable), so the series walk has to refuse it too.
+        first = BASE.replace('line 3\n', 'LINE 3\n')
+        earlier = self.diff_for({'f.txt': first})
+        self.commit({'f.txt': first})
+        stacked = self.diff_for({'f.txt': first.replace('line 4\n', 'LINE 4\n')})
+        self.git('reset', '-q', '--hard', 'HEAD~1')
+        self.configure({'earlier': earlier, 'stacked': stacked})
+        for command in ('verify', 'rebase'):
+            result, report = self.run_series(command)
+            self.assertEqual(result.returncode, 1, command)
+            self.assertEqual([p['state'] for p in report['patches']], ['overlapped', 'applies'], command)
+        self.assertEqual(self.leftovers(), [])
+
     def test_rebase_regenerates_a_cleanly_merged_artifact_including_new_files(self):
         old = self.git('rev-parse', 'HEAD').strip()
         patch = self.diff_for({'f.txt': BASE.replace('line 18\n', 'LINE 18\n'), 'new.py': 'x = 1\n'})

@@ -1,8 +1,8 @@
 diff --git a/hermes_cli/kanban_db.py b/hermes_cli/kanban_db.py
-index 7db9dd1..0870bd4 100644
+index 31a142001f..067b6175b3 100644
 --- a/hermes_cli/kanban_db.py
 +++ b/hermes_cli/kanban_db.py
-@@ -1242,6 +1242,10 @@ def create_task(
+@@ -1296,6 +1296,10 @@ def create_task(
      from hermes_cli.kanban_db_graph import initial_task_state, inherit_creator_origin
      from hermes_cli.kanban_pr_acceptance import validate_contract
  
@@ -13,14 +13,17 @@ index 7db9dd1..0870bd4 100644
      completion_contract = validate_contract(completion_contract)
      model_override, provider_override = _validate_model_override(model_override, provider_override)
      reasoning_effort = normalize_reasoning_effort(reasoning_effort)
-diff --git a/tests/hermes_cli/test_kanban_pr_acceptance.py b/tests/hermes_cli/test_kanban_pr_acceptance.py
-index 5e80199..ad2b84f 100644
---- a/tests/hermes_cli/test_kanban_pr_acceptance.py
-+++ b/tests/hermes_cli/test_kanban_pr_acceptance.py
-@@ -319,3 +319,13 @@ def test_prior_receipt_does_not_override_explicit_evidence(github, source, value
-             metadata = None
-         assert kb.complete_task(conn, tid, summary="Approved", metadata=metadata) is (value == "omitted")
-         assert (kb.get_task(conn, tid).status == "done") is (value == "omitted")
+diff --git a/tests/hermes_cli/test_kanban_board_default_contract.py b/tests/hermes_cli/test_kanban_board_default_contract.py
+new file mode 100644
+index 0000000000..b7ee14bda0
+--- /dev/null
++++ b/tests/hermes_cli/test_kanban_board_default_contract.py
+@@ -0,0 +1,15 @@
++"""A board's default completion contract fills in only when a card names none."""
++import json
++
++from hermes_cli import kanban_db as kb
++from hermes_cli.kanban_db_connect import connect
 +
 +
 +def test_board_default_contract_applies_only_when_none_is_given():
