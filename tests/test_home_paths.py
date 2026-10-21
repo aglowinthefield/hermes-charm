@@ -35,7 +35,7 @@ class HomePathTests(unittest.TestCase):
                 cmd(['gh', 'pr', 'list'])
                 return ''
             with patch.dict(os.environ, {'HERMES_HOME': tmp}), \
-                 patch.object(deployment_settings, 'get', side_effect=lambda section, key: settings[key]), \
+                 patch.object(deployment_settings, 'get', side_effect=lambda section, key, default=None: settings.get(key, default)), \
                  patch.object(sweep, 'run', side_effect=run), \
                  patch.object(sweep.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='[]', stderr='')) as process, \
                  patch.object(sys, 'argv', ['pr-conflict-sweep.py']):
