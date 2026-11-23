@@ -4,3 +4,5 @@ __pycache__/
 .hermes-test/
 .install-metadata.json
 .hermes-catalog.json
+
+.worktrees/
